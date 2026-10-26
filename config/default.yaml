@@ -1,0 +1,80 @@
+# All three directories must be outside this repository and outside each other (enforced at load time).
+paths:
+  data_root: ~/nab-data     # raw downloads, derived task data, trained-model tool weights
+  runs_root: ~/nab-runs     # per-run workspaces, logs and run records, per batch
+  truth_root: ~/nab-truth   # test labels, submissions, per-case scores and the ledger; scorer only
+
+sandbox:
+  # The agent can never read these either (related projects with design docs or answer keys).
+  deny_extra: [~/dark-gene-bench, ~/dgb-data, ~/dgb-runs, ~/dgb-truth]
+  # CLI state directories the agent CLI itself must write to.
+  extra_write: [~/.claude-bench, ~/.codex-bench]
+
+run:
+  max_attempts: 3   # attempts per run that ended in an error; then the run stays missing and the report interim
+
+# Identical for every model and condition; the task itself is in the workspace's TASK.md.
+prompt: "Read TASK.md in the current directory and complete the task it describes. Work only inside the current directory."
+
+conditions:
+  C1: {mode: program, tools: all, scrambled: false}       # core
+  C2: {mode: program, tools: generic, scrambled: false}   # C1 - C2: dependence on trained-model tools
+  C3: {mode: program, tools: all, scrambled: true}        # scrambled signal; above baseline means leakage
+  C4: {mode: investigate, tools: all, scrambled: false}   # subset of tasks
+  C5: {mode: native, tools: generic, scrambled: false}    # subset of tasks; no code execution
+
+modes:
+  program: >
+    Write and run code to analyse the development data and produce the test predictions.
+  investigate: >
+    Before producing predictions, explore the development data and write `submission/notes.md` describing
+    what you examined, what you found and how it informed your approach. Then write and run code to produce
+    the test predictions.
+  native: >
+    Do not write or run code. Read the files directly and write the predictions file yourself.
+
+models:
+  - name: fake-scripted       # deterministic stand-in for harness tests; never a reported model
+    enabled: true
+    backend: scripted
+    module: nabench.fake_agent
+    sandbox_network: false
+  # Agent CLIs use workspace sign-ins. Confirm every flag with `claude --help` and `codex exec --help`
+  # before the first run, and smoke-test on the dummy task only.
+  - name: opus-5.5-cli
+    enabled: false
+    backend: cli
+    cutoff_date: "2026-07-01"
+    version_command: ["claude", "--version"]
+    command: ["claude", "-p", "{prompt}", "--model", "claude-opus-5-5", "--output-format", "json",
+              "--permission-mode", "bypassPermissions", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep",
+              "--disallowedTools", "WebFetch,WebSearch,Task", "--strict-mcp-config", "--no-session-persistence"]
+    command_native: ["claude", "-p", "{prompt}", "--model", "claude-opus-5-5", "--output-format", "json",
+                     "--permission-mode", "bypassPermissions", "--allowedTools", "Read,Write,Glob,Grep",
+                     "--disallowedTools", "Bash,Edit,WebFetch,WebSearch,Task", "--strict-mcp-config", "--no-session-persistence"]
+    usage: last                # one JSON result object with a `usage` field
+    sandbox_network: true      # the CLI needs its API; the OS sandbox still confines files
+    env:
+      CLAUDE_CONFIG_DIR: ~/.claude-bench
+  - name: sol-6.1-cli
+    enabled: false
+    backend: cli
+    cutoff_date: "2026-05-01"
+    version_command: ["codex", "--version"]
+    command: ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write",
+              "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"xhigh\"", "--disable", "apps", "--disable", "plugins",
+              "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "multi_agent",
+              "--json", "--color", "never", "{prompt}"]
+    command_native: ["<<FILL: codex invocation that can write files but not run commands>>", "{prompt}"]
+    usage: sum                 # JSONL events; per-turn `usage` objects are summed
+    sandbox_network: true      # codex's workspace-write sandbox keeps agent commands offline
+    env:
+      CODEX_HOME: ~/.codex-bench
+  - name: open-weights-cli
+    enabled: false
+    backend: cli
+    cutoff_date: "<<FILL: model knowledge cutoff>>"
+    version_command: ["<<FILL: version command>>"]
+    command: ["<<FILL: agent CLI serving an open-weights model>>", "{prompt}"]
+    usage: "<<FILL: last or sum>>"
+    sandbox_network: true

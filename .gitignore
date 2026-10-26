@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+*.key
+
+# Data, runs and answer keys live outside the repo (config/default.yaml).
+# These patterns catch accidental copies.
+data/
+runs/
+truth/
+*.npy
+*.npz
+*.h5
+*.nwb
+*.nii
+*.nii.gz
+*.parquet
+*.jsonl

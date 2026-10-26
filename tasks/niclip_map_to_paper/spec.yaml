@@ -1,0 +1,46 @@
+# Pilot task, chosen before the selection rule (docs/TASK_SELECTION.md); reported separately.
+# Stub: every FILL must be resolved through the audit (see audits/niclip_map_to_paper.md: what the agent sees about each candidate, coordinate-reconstruction baseline) before the spec is frozen.
+id: niclip_map_to_paper
+selection: pilot_pre_rule
+modality: fmri
+source:
+  name: "<<FILL: NiCLIP: exact dataset name and version>>"
+  url: "<<FILL: dataset URL>>"
+  licence: "<<FILL: licence, and whether redistribution of a private split is allowed>>"
+  released: {data: "<<FILL: YYYY-MM-DD data release>>", test_labels: "<<FILL: YYYY-MM-DD, never or unknown>>"}
+question: "<<FILL: agent-facing task text. Draft: Given a brain activation map, rank the candidate papers by how likely each reported it.>>"
+prediction_format: "<<FILL: agent-facing description of the prediction column>>"
+data:
+  dev_inputs: "<<FILL: {data_root}/tasks/niclip_map_to_paper/dev/... input files>>"
+  dev_labels: "<<FILL: {data_root}/tasks/niclip_map_to_paper/dev/... label files>>"
+  test_inputs: "<<FILL: {data_root}/tasks/niclip_map_to_paper/test/... input files, no labels>>"
+  truth: "<<FILL: {truth_root}/tasks/niclip_map_to_paper/test_labels.csv>>"
+metric:
+  function: "<<FILL: package.module:function in src/nabench returning per-case scores>>"
+  higher_is_better: "<<FILL: true or false>>"
+  description: "<<FILL: metric name and definition>>"
+baselines:
+  simple: {function: "<<FILL: module:function>>", description: "<<FILL: simple baseline>>"}
+  sota:
+    name: "<<FILL: published SOTA method>>"
+    code: "<<FILL: repository URL and commit>>"
+    function: "<<FILL: module:function that reruns it on this split>>"
+    published: {value: "<<FILL: published number on this split and metric>>", source: "<<FILL: paper, table>>"}
+  automl:
+    function: "<<FILL: module:function>>"
+    budget: {wall_time_s: "<<FILL: equal to budgets.wall_time_s>>", gpu_hours: "<<FILL: equal to budgets.gpu_hours>>"}
+noise_ceiling:
+  method: "<<FILL: noise-ceiling method, or none>>"
+  function: "<<FILL: module:function, or null if no ceiling exists>>"
+budgets: {tokens: "<<FILL: logged token budget>>", wall_time_s: "<<FILL: hard limit per run>>", gpu_hours: "<<FILL: at most about 24>>", submission_limit: "<<FILL: scored submissions per condition and model>>"}
+tools:
+  generic: "<<FILL: generic packages available in the workspace>>"
+  trained_models: "<<FILL: list of trained-model tools: name, files, call, interface>>"
+scramble:
+  method: "<<FILL: label_permutation, phase_randomization or other>>"
+  function: "<<FILL: module:function>>"
+  description: "<<FILL: what is scrambled in dev and test inputs>>"
+contamination:
+  model_cutoffs_vs_release: "<<FILL: each evaluated model cutoff vs data and label release dates>>"
+  test_labels_public: "<<FILL: true, false or unknown>>"
+  split_provenance: "<<FILL: who made the split, from which subjects or sessions, and whether a private re-split is possible>>"

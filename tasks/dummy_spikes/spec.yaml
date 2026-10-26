@@ -1,0 +1,53 @@
+id: dummy_spikes
+selection: dummy
+synthetic: true
+modality: spikes
+source:
+  name: Simulated cosine-tuned Poisson population (nabench.tasks.dummy_spikes.build)
+  url: none (generated locally by scripts/build_dummy.py)
+  licence: same as this repository
+  released: {data: "2026-10-26", test_labels: never}
+question: |
+  Each trial, a population of 40 neurons was recorded while one of 8 movement directions (dir0 to dir7) was
+  shown. Inputs are spike counts per neuron in a fixed window. Predict the direction for every test trial.
+prediction_format: "`prediction` is the direction label, one of dir0 to dir7."
+data:
+  dev_inputs: ["{data_root}/tasks/dummy_spikes/dev/spikes.npy"]   # (160 trials, 40 neurons) int counts
+  dev_labels: ["{data_root}/tasks/dummy_spikes/dev/labels.csv"]   # case_id,label in the same row order
+  test_inputs: ["{data_root}/tasks/dummy_spikes/test/spikes.npy", "{data_root}/tasks/dummy_spikes/test/case_ids.csv"]
+  truth: "{truth_root}/tasks/dummy_spikes/test_labels.csv"
+metric:
+  function: "nabench.metrics:accuracy"
+  higher_is_better: true
+  description: accuracy
+baselines:
+  simple: {function: "nabench.tasks.dummy_spikes:simple_baseline", description: most frequent dev label}
+  sota:
+    name: Poisson naive Bayes
+    code: "nabench.tasks.dummy_spikes:sota_baseline (this repository)"
+    function: "nabench.tasks.dummy_spikes:sota_baseline"
+    published: {value: null, source: synthetic task; no publication}
+  automl:
+    function: "nabench.tasks.dummy_spikes:automl_baseline"
+    budget: {wall_time_s: 600, gpu_hours: 0}
+noise_ceiling:
+  method: Bayes-optimal decoder with the generating rates
+  function: "nabench.tasks.dummy_spikes:noise_ceiling"
+budgets: {tokens: 200000, wall_time_s: 600, gpu_hours: 0, submission_limit: 1}
+tools:
+  generic: [python, numpy, scipy, scikit-learn]
+  trained_models:
+    - name: pretrained_decoder
+      files: ["{task_dir}/tools/pretrained_decoder/predict.py", "{data_root}/tasks/dummy_spikes/tools/pretrained_decoder/weights.npz"]
+      call: "python tools/pretrained_decoder/predict.py INPUT.npy OUTPUT.csv"
+      interface: >
+        INPUT.npy holds integer spike counts with shape (n_trials, 40). OUTPUT.csv gets the header `row,label`
+        and one predicted direction per input row, in input order. Fitted on separate pretraining trials.
+scramble:
+  method: label_permutation
+  function: "nabench.tasks.dummy_spikes:scramble"
+  description: Dev labels permuted across dev trials; test inputs permuted across test cases.
+contamination:
+  model_cutoffs_vs_release: Generated locally; no model can have seen it.
+  test_labels_public: false
+  split_provenance: Fixed seed in build(); dev, test and pretraining trials drawn independently.
