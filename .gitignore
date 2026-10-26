@@ -28,3 +28,6 @@ truth/
 *.nii.gz
 *.parquet
 *.jsonl
+
+# Local agent settings (kept off GitHub)
+.claude/
