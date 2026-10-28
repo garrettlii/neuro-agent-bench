@@ -35,3 +35,27 @@ Append-only. Any change to a frozen spec, metric, baseline, budget or scoring ru
 - **D-014 C3 spike-rate difference accepted (owner).** Scrambled dev windows hold about 8% fewer spikes than real ones (110.2 M vs 119.7 M), because task-time windows fire more than the session average. This is inherent to the circular-shift scramble and stays.
 
 - **D-015 Frame timing stated in the question (owner).** The BWB question now gives the frame bin width (20 ms) and says each frame is taken to be its bin's midpoint. The exact time of the 50 Hz sample within its bin is not staged.
+
+- **D-016 Hardware correction (owner; deviation after batch b-20261028-044630-f61b was generated).** Agents had access to the Apple GPU through torch's MPS backend, but no CUDA GPU. Only POYO+ needs CUDA; it cannot run on MPS. The pre-registration's "agents on CPU" is wrong on that point. Its conclusion stands: the SOTA rerun had a CUDA GPU and the agents did not, which disadvantages agents. MPS stays available to agents for the rest of this batch. MPS access was confirmed for the agent user outside the CLIs on 2026-10-27, not inside each CLI's own sandbox. The spec's `baselines.sota.hardware` line ("no CUDA GPU") is unaffected.
+
+- **D-017 D5 statement in the written report (owner; deviation after batch b-20261028-044630-f61b was generated).** The pre-registration's "the report states this" about the missing open-weights model (D5) is met by the written pilot report, not by the scorer, which is unchanged.
+
+- **D-018 GPU SOTA rerun: 4 h, seed rule, precision (owner; deviation after batch b-20261028-044630-f61b was generated; settles the question left open in D-010).**
+  - **Limit:** the rerun gets 4 h of wall time, counted from the start of the job script and enforced at the end of every epoch.
+  - **Seeds:** seed 1 runs on every session first. Seeds 2-5 run if five times seed 1's time fits in 4 h, and they are kept only if they all finish in time; otherwise the result is seed 1 alone. If seed 1 does not finish every session, there is no SOTA.
+  - **Precision:** training uses bf16 autocast, as the benchmark did, if the GPU supports bf16; otherwise fp32.
+  - **Provenance:** the job writes the GPU model, precision, seeds run and fit time into `provenance.json`, which `MANIFEST.sha256` covers. The manifest stays a plain checksum list because the batch's `sota_baseline` parses it. `scripts/sota_gpu.py import` refuses any result that breaks these rules.
+  - **Where the code lives:** `scripts/sota_gpu_job.py` and `src/nabench/tasks/bwb_sota_gpu.py`. `bwb_neuropixels_wheel.py` is unchanged, because the running batch imports it; bf16 is applied by the job script around the model's forward pass. The job no longer resumes; each run is one attempt of at most 4 h.
+  - **Not settled:** a seed-1-only result cannot be used by batch b-20261028-044630-f61b. That batch's `sota_baseline` check and its reference rows `sota_seed1`..`sota_seed5` expect five seeds, so the import refuses it, and the report could never become final. If that case arises, it needs an owner decision and a code change.
+
+- **D-019 GPU SOTA seeds in parallel; no partial-seed fallback (owner, before any GPU run; supersedes D-018's seed rule and settles its open point).**
+  - **Parallel seeds:** the 5 SOTA seeds may run in parallel, on separate GPUs or as concurrent processes on one GPU.
+  - **Limit:** the 4 h wall-time limit covers the whole job, from the first seed starting to the last seed finishing.
+  - **No fallback:** if a single seed cannot finish all 29 sessions within 4 h, the job stops, nothing is imported, and BWB is recorded as failing rule (c) on that hardware. There is no seed-1-only result.
+  - **Implementation, GPU side only:**
+    - `run_sota.py --seeds S...` runs a subset and writes a part with each seed's GPU, precision, start and end.
+    - Each process stops at the first epoch end past 4 h from its own start.
+    - `run_sota.py --merge` combines parts into the standard 5-seed result. It records each seed's GPU, start and end, and the job's overall wall time. It refuses parts from another export, missing or repeated seeds, or a job over 4 h.
+    - `scripts/sota_gpu.py import` refuses a result whose overall wall time, recomputed from the seeds' times, exceeds 4 h. Across machines this relies on their clocks agreeing.
+    - `--smoke` projects seconds per session per seed from 42 epochs of one session.
+  - **Batch code unchanged:** no code the running batch imports changed.

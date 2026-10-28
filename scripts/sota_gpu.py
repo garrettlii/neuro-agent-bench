@@ -7,10 +7,13 @@
 The export holds the dev and test inputs the job reads (never truth), the POYO+ checkpoint, the selected learning
 rates, the ibl-bwb source at the spec's commit, this package's BWB task module, the job script (scripts/sota_gpu_job.py)
 and its environment. Import checks OUT's manifest, that the job read exactly the local inputs, and the predictions'
-format, then copies them to data_root/tasks/bwb_neuropixels_wheel/sota_gpu/, where sota_baseline reads them.
+format, and that its provenance keeps D-018 and D-019 (each seed's GPU model and precision, all 5 seeds, the
+whole job within 4 h), then copies them to data_root/tasks/bwb_neuropixels_wheel/sota_gpu/, where sota_baseline
+reads them.
 """
 import argparse
 import io
+import json
 import re
 import shutil
 import subprocess
@@ -21,8 +24,9 @@ from pathlib import Path
 from nabench.config import REPO_ROOT, load_config
 from nabench.spec import load_spec, resolve
 from nabench.tasks import bwb_neuropixels_wheel as bwb
+from nabench.tasks import bwb_sota_gpu as rule
 
-CODE = ("__init__.py", "metrics.py", "tasks/__init__.py", "tasks/bwb_neuropixels_wheel.py")
+CODE = ("__init__.py", "metrics.py", "tasks/__init__.py", "tasks/bwb_neuropixels_wheel.py", "tasks/bwb_sota_gpu.py")
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("action", choices=["export", "import"])
@@ -37,9 +41,12 @@ target = Path(args.dir).resolve()
 
 if args.action == "import":
     errors = bwb.check_sota_result(target, root)
-    dest = root / "sota_gpu"
     if errors:
         sys.exit("not imported:\n- " + "\n- ".join(errors))
+    problems = rule.provenance_problems(json.loads((target / "provenance.json").read_text()), bwb.EVAL_SEEDS)
+    if problems:  # among them a job over 4 h from the first seed's start to the last seed's end
+        sys.exit("not imported, provenance breaks D-018 or D-019:\n- " + "\n- ".join(problems))
+    dest = root / "sota_gpu"
     if dest.exists():
         sys.exit(f"{dest} exists; move it aside first")
     for f in (*bwb.SOTA_RESULT, "MANIFEST.sha256"):
