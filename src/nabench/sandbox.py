@@ -6,6 +6,8 @@ runs_root (other workspaces, logs), truth_root, or any extra denied path. Writes
 are limited to the workspace, temp directories and configured CLI state
 directories. Network is denied unless the model's CLI needs it to reach its own
 API, in which case the CLI's own tool sandbox must block network for agent code.
+CLIs whose own sandbox is sandbox-exec cannot run under this one; they run as a
+separate user instead (`isolation: agent_user`, agentuser.py).
 """
 from __future__ import annotations
 

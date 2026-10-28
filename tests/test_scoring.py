@@ -1,7 +1,7 @@
 import numpy as np
 
 from nabench.metrics import accuracy, read_predictions
-from nabench.scoring import ci, completeness, ratio
+from nabench.scoring import _tokens, ci, completeness, ratio
 
 
 def test_normalized_score_anchors():
@@ -32,3 +32,9 @@ def test_completeness_counts_missing_and_errors():
     st = completeness(manifest, subs, runs)
     assert st["missing"] == ["t__C2__m__r1"] and st["errors_pending"] == 1
     assert completeness(manifest, subs + [{"run_id": "t__C2__m__r1"}], runs)["missing"] == []
+
+
+def test_tokens_in_include_cached_input():
+    claude = {"input_tokens": 14, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 5}
+    codex = {"input_tokens": 1200, "cached_input_tokens": 1000, "output_tokens": 5, "reasoning_output_tokens": 2}
+    assert _tokens([{"tokens": claude}]) == "1,114 / 5" and _tokens([{"tokens": codex}]) == "1,200 / 5"

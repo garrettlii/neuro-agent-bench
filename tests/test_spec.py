@@ -14,11 +14,14 @@ def test_every_spec_validates():
         assert validate(load_spec(t), t) == [], t
 
 
-def test_dummy_is_frozen_and_pilots_are_not():
+def test_dummy_and_bwb_are_frozen_and_other_pilots_are_not():
     frozen(load_spec("dummy_spikes"))
     for t in PILOTS:
         spec = load_spec(t)
         assert spec["selection"] == "pilot_pre_rule"
+        if t == "bwb_neuropixels_wheel":  # filled for prereg/pilot-bwb.md
+            frozen(spec)
+            continue
         with pytest.raises(SpecError, match="unfilled"):
             frozen(spec)
 

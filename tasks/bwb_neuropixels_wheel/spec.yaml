@@ -1,46 +1,113 @@
 # Pilot task, chosen before the selection rule (docs/TASK_SELECTION.md); reported separately.
-# Stub: every FILL must be resolved through the audit (see audits/bwb_neuropixels_wheel.md: SOTA on the exact split, temporal leakage) before the spec is frozen.
+# Draft fill. Remaining <<FILL values are owner decisions or facts still to look up.
 id: bwb_neuropixels_wheel
 selection: pilot_pre_rule
 modality: spikes
 source:
-  name: "<<FILL: BrainWideBench: exact dataset name and version>>"
-  url: "<<FILL: dataset URL>>"
-  licence: "<<FILL: licence, and whether redistribution of a private split is allowed>>"
-  released: {data: "<<FILL: YYYY-MM-DD data release>>", test_labels: "<<FILL: YYYY-MM-DD, never or unknown>>"}
-question: "<<FILL: agent-facing task text. Draft: Decode wheel movement from Neuropixels spiking activity.>>"
-prediction_format: "<<FILL: agent-facing description of the prediction column>>"
+  name: >-
+    IBL BrainWideBench (Andre et al. 2026, arXiv 2609.22064v1), task suite TS1, target wheel_speed, evaluation split
+    (29 sessions from 13 held-out mice); data build all_units;
+    evaluation contract ibl-bwb-eval==0.1.0
+  url: https://github.com/brainbench-org/ibl-bwb (data s3://brain-wide-bench; scorer https://pypi.org/project/ibl-bwb-eval/)
+  licence: Raw data CC-BY 4.0 (DANDI 000409). The processed S3 build states no licence; do not redistribute it without asking IBL.
+  released:
+    data: "2024-02-15"
+    test_labels: "2024-02-15"
+question: |
+  Each case is one Neuropixels recording session from a mouse that appears in no pretraining data. The mouse turns a
+  wheel to report the side of a visual stimulus. For every trial you get the spike times of all recorded units from the
+  trial's movement onset to 1.0 s after it (the benchmark's default 1 s context, the same window as the wheel speed to
+  predict). No brain-region labels and no other trial events are given. Development trials are the benchmark's train
+  and validation trials, up to a cut at 60% of each session's total trial time; for them you also get wheel speed:
+  absolute wheel angular velocity in rad/s at the 50 frames of a 50 Hz grid inside the same window. Frames are 20 ms
+  bins: frame k is the 50 Hz sample that falls in [20k, 20k + 20) ms after movement onset, its exact time within the bin
+  is not given, and it is taken to be the bin midpoint, 20k + 10 ms. Test trials are the rest of the session after a
+  20 s gap; trials inside the gaps are in neither set. Predict the 50 wheel-speed frames of every test trial.
+
+  `sessions.npz` (dev and test) holds, for each case `<c>`: `<c>_n_units` (units, indexed 0 to n_units - 1),
+  `<c>_trial_index` (trial numbers, in time order), `<c>_spike_ptr` (the spikes of trial i are entries ptr[i]:ptr[i+1]
+  of the next two arrays), `<c>_spike_times` (float32 seconds since movement onset, in [0, 1)) and `<c>_spike_units`
+  (the unit of each spike). Dev also has `<c>_is_val`, True for the benchmark's validation trials, which follow its
+  train trials after a 20 s gap. `dev/wheel_speed.npz` holds `<c>`: float32, one row of 50 frames per dev trial, in
+  `<c>_trial_index` order.
+prediction_format: >-
+  One row per session. `prediction` is the session's predicted wheel speed for every test trial, in the order listed in
+  test/trial_index.csv, 50 values per trial, concatenated and separated by single spaces.
 data:
-  dev_inputs: "<<FILL: {data_root}/tasks/bwb_neuropixels_wheel/dev/... input files>>"
-  dev_labels: "<<FILL: {data_root}/tasks/bwb_neuropixels_wheel/dev/... label files>>"
-  test_inputs: "<<FILL: {data_root}/tasks/bwb_neuropixels_wheel/test/... input files, no labels>>"
-  truth: "<<FILL: {truth_root}/tasks/bwb_neuropixels_wheel/test_labels.csv>>"
+  dev_inputs: ["{data_root}/tasks/bwb_neuropixels_wheel/dev/sessions.npz"]
+  dev_labels: ["{data_root}/tasks/bwb_neuropixels_wheel/dev/wheel_speed.npz"]
+  test_inputs: ["{data_root}/tasks/bwb_neuropixels_wheel/test/sessions.npz", "{data_root}/tasks/bwb_neuropixels_wheel/test/trial_index.csv", "{data_root}/tasks/bwb_neuropixels_wheel/test/case_ids.csv"]
+  truth: "{truth_root}/tasks/bwb_neuropixels_wheel/test_labels.csv"
 metric:
-  function: "<<FILL: package.module:function in src/nabench returning per-case scores>>"
-  higher_is_better: "<<FILL: true or false>>"
-  description: "<<FILL: metric name and definition>>"
+  function: "nabench.tasks.bwb_neuropixels_wheel:session_r2"
+  higher_is_better: true
+  description: >-
+    Per-session R^2 of wheel speed over all test frames, clipped at 0 (the benchmark's definition, paper Appendix E.3),
+    averaged over the 29 sessions. Checked against ibl_bwb_eval's TS1 scorer on the baselines before freezing.
 baselines:
-  simple: {function: "<<FILL: module:function>>", description: "<<FILL: simple baseline>>"}
+  simple: {function: "nabench.tasks.bwb_neuropixels_wheel:simple_baseline", description: "Single-session linear decoder (the benchmark's Linear baseline)"}
   sota:
-    name: "<<FILL: published SOTA method>>"
-    code: "<<FILL: repository URL and commit>>"
-    function: "<<FILL: module:function that reruns it on this split>>"
-    published: {value: "<<FILL: published number on this split and metric>>", source: "<<FILL: paper, table>>"}
+    name: POYO+ (pretrained on the 423 pretraining sessions, finetuned per evaluation session, mean of 5 seeds)
+    code: "https://github.com/brainbench-org/ibl-bwb @ 6fbd666fe8170a2165f5198c1f490911424a654d"
+    function: "nabench.tasks.bwb_neuropixels_wheel:sota_baseline"
+    hardware: >-
+      The SOTA rerun ran on a CUDA GPU on a separate machine, given the dev and test inputs only (D-010). Agent runs
+      and the simple and AutoML baselines ran on the harness Mac (Apple silicon, no CUDA GPU).
+    published: {value: 0.362, source: "Andre et al. 2026, arXiv 2609.22064v1, Table 1 (mean over evaluation sessions, 5 finetuning seeds)"}
   automl:
-    function: "<<FILL: module:function>>"
-    budget: {wall_time_s: "<<FILL: equal to budgets.wall_time_s>>", gpu_hours: "<<FILL: equal to budgets.gpu_hours>>"}
+    function: "nabench.tasks.bwb_neuropixels_wheel:automl_baseline"
+    budget: {wall_time_s: 14400, gpu_hours: 4}
+references:
+  - name: profile
+    function: "nabench.tasks.bwb_references:profile"
+    leakage_margin: 0.05
+    description: >-
+      Signal-free reference: each session's dev-set mean wheel-speed time course after movement onset, applied to every
+      test trial, with no neural data. The C3 leakage check compares against it (pre-registration P4).
+  - name: sota_seed1
+    function: "nabench.tasks.bwb_references:sota_seed1"
+    description: "POYO+ finetuning seed 1 alone; the SOTA baseline submits the mean of the five seeds' predictions."
+  - name: sota_seed2
+    function: "nabench.tasks.bwb_references:sota_seed2"
+    description: "POYO+ finetuning seed 2 alone; the SOTA baseline submits the mean of the five seeds' predictions."
+  - name: sota_seed3
+    function: "nabench.tasks.bwb_references:sota_seed3"
+    description: "POYO+ finetuning seed 3 alone; the SOTA baseline submits the mean of the five seeds' predictions."
+  - name: sota_seed4
+    function: "nabench.tasks.bwb_references:sota_seed4"
+    description: "POYO+ finetuning seed 4 alone; the SOTA baseline submits the mean of the five seeds' predictions."
+  - name: sota_seed5
+    function: "nabench.tasks.bwb_references:sota_seed5"
+    description: "POYO+ finetuning seed 5 alone; the SOTA baseline submits the mean of the five seeds' predictions."
 noise_ceiling:
-  method: "<<FILL: noise-ceiling method, or none>>"
-  function: "<<FILL: module:function, or null if no ceiling exists>>"
-budgets: {tokens: "<<FILL: logged token budget>>", wall_time_s: "<<FILL: hard limit per run>>", gpu_hours: "<<FILL: at most about 24>>", submission_limit: "<<FILL: scored submissions per condition and model>>"}
+  method: none (no repeated-trial ceiling for frame-level wheel speed)
+  function: null
+budgets:
+  tokens: 3000000
+  wall_time_s: 14400
+  gpu_hours: 4
+  submission_limit: 3
 tools:
-  generic: "<<FILL: generic packages available in the workspace>>"
-  trained_models: "<<FILL: list of trained-model tools: name, files, call, interface>>"
+  generic: [python, numpy, scipy, pandas, scikit-learn, torch]
+  trained_models: []  # C1 deferred (D-011); the poyo_plus tool it would stage is described there
 scramble:
-  method: "<<FILL: label_permutation, phase_randomization or other>>"
-  function: "<<FILL: module:function>>"
-  description: "<<FILL: what is scrambled in dev and test inputs>>"
+  method: other
+  function: "nabench.tasks.bwb_neuropixels_wheel:scramble"
+  description: >-
+    Spike times of each session circularly shifted against behaviour and trial events by one offset drawn uniformly from
+    10% to 90% of the session's duration, in dev and test inputs alike. Wheel-speed labels stay attached to their trials.
 contamination:
-  model_cutoffs_vs_release: "<<FILL: each evaluated model cutoff vs data and label release dates>>"
-  test_labels_public: "<<FILL: true, false or unknown>>"
-  split_provenance: "<<FILL: who made the split, from which subjects or sessions, and whether a private re-split is possible>>"
+  model_cutoffs_vs_release: >-
+    Opus 5.5 cutoff 2026-07-01 and Sol 6.1 2026-05-01 (config/default.yaml). The benchmark appeared after both (repository
+    created 2026-09-14, arXiv v1 2026-09-18), but its evaluation sessions' raw spikes and wheel traces were public through
+    IBL ONE / DANDI 000409 before both cutoffs (DANDI 000409 created 2023-01-31; the IBL release changelog's last
+    addition of sessions is 2024-02-15). Whether models memorized frame-level traces is untested (C3 is the check);
+    retrieval is possible for any agent whose code has network access.
+  test_labels_public: true
+  split_provenance: >-
+    Benchmark authors. Animal-level split: the 13 evaluation mice (29 sessions) share no animal with the 126 pretraining
+    mice (paper Section 3.1, Appendix C.1). Within each session a causal temporal split in trial order: first 40% of
+    trials train, next 20% validation (both dev here), last 40% test, with a 20 s gap between adjacent splits (Appendix
+    C.2, Figure A5); the last-40% test split is enforced by the benchmark (Appendix D.1). No private re-split is
+    possible: the paper states all pretraining and evaluation sessions are openly released (Appendix C.1, p. 27).
+notes: "Source of the earlier pilot's SOTA 0.244 unresolved; that pilot row is not cited."

@@ -109,8 +109,8 @@ def automl_baseline(workspace: Path, budget: dict) -> dict[str, str]:
     return {cid: LABELS[k] for cid, k in zip(ids, best.predict(xt))}
 
 
-def scramble(data_dir: Path, rng: np.random.Generator) -> None:
-    """Permute dev labels across dev trials and test inputs across test cases."""
+def scramble(data_dir: Path, rng: np.random.Generator, spec: dict) -> None:
+    """Permute dev labels across dev trials and test inputs across test cases (`spec` unused)."""
     labels = read_cases(data_dir / "dev" / "labels.csv", "label")
     write_cases(data_dir / "dev" / "labels.csv", dict(zip(labels, rng.permutation(list(labels.values())))), "label")
     x = np.load(data_dir / "test" / "spikes.npy")

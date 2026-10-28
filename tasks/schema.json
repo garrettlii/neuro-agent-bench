@@ -58,6 +58,7 @@
             "name": {"$ref": "#/$defs/str"},
             "code": {"$ref": "#/$defs/str", "description": "Repository URL and commit of the published code."},
             "function": {"$ref": "#/$defs/ref", "description": "Rerun on this task's split."},
+            "hardware": {"$ref": "#/$defs/str", "description": "Where the rerun and the agents ran, when they differ; printed in the report."},
             "published": {
               "type": "object", "additionalProperties": false, "required": ["value", "source"],
               "properties": {"value": {"anyOf": [{"type": "number"}, {"type": "null"}, {"$ref": "#/$defs/fill"}]},
@@ -74,6 +75,15 @@
                        "description": "Must equal the agent budget."}
           }
         }
+      }
+    },
+    "references": {
+      "type": "array",
+      "description": "Prediction sets made in the baseline step and scored like the baselines, never used in normalization. Each function is called as fn(workspace, budget, baseline_workspaces). Names starting with sota_seed are per-seed SOTA predictions; the reference with leakage_margin is the signal-free one the C3 leakage check compares against.",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "function", "description"],
+        "properties": {"name": {"type": "string", "pattern": "^[a-z0-9_]+$"}, "function": {"$ref": "#/$defs/ref"},
+                       "description": {"$ref": "#/$defs/str"}, "leakage_margin": {"$ref": "#/$defs/num"}}
       }
     },
     "noise_ceiling": {

@@ -30,6 +30,12 @@ def test_hard_timeout_kills_child_processes(tmp_path):
         os.kill(int(pidfile.read_text()), 0)
 
 
+def test_timeout_runs_kill_command(tmp_path):
+    marker = tmp_path / "killed"
+    b = CLIBackend([sys.executable, "-c", "import time; time.sleep(60)", "{prompt}"], kill_command=["touch", str(marker)])
+    assert b.run("x", tmp_path, timeout_s=1).timed_out and marker.exists()
+
+
 def test_version_and_command_recorded():
     m = {"backend": "cli", "command": ["agent", "{prompt}"], "version_command": [sys.executable, "--version"],
          "env": {"X_HOME": "~/x"}, "usage": "last"}

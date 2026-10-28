@@ -11,8 +11,9 @@ For each task, per test case, the scorer computes the task metric for the agent,
 - Metrics are per-case and aggregate by the mean, so every CI is a paired bootstrap over test cases (the same resampled cases for agent, simple and SOTA). 95% percentile intervals, 2,000 draws by default.
 - Repetitions of a run are averaged per case before bootstrapping.
 - Across tasks: the mean normalized score, bootstrapping cases independently within each task. Tasks with different `selection` (dummy, pilot chosen before the rule, admitted by the rule) are never pooled.
-- Cost (tokens in and out, wall time, GPU-hours) is reported next to every score. Tokens come from each CLI's own output; GPU-hours are recorded where the run reports them and otherwise shown as n/a.
+- Cost (tokens in and out, wall time, GPU-hours) is reported next to every score. Tokens come from each CLI's own output, with input counting cached input too (D-005); GPU-hours are recorded where the run reports them and otherwise shown as n/a.
 - Missing or unparseable predictions score as the worst value for that case (for accuracy, 0), and the number of missing cases is reported.
+- Baselines run on the same Mac as the agents. If a SOTA rerun cannot finish there within the task's wall time, the task is recorded as failing rule (c) on this harness.
 
 ## Conditions
 
@@ -28,12 +29,12 @@ The prompt and `TASK.md` are identical across models, and identical between C1 a
 
 ## Integrity
 
-- **Scorer outside the sandbox.** The agent runs under an OS sandbox (macOS `sandbox-exec`) that denies reading or writing the repository, `data_root`, `runs_root` (other workspaces, logs and run records) and `truth_root`, and denies writes outside its workspace and temp directories. Network is denied for agent code; a CLI that must reach its own API gets network, and its own tool sandbox must keep agent commands offline.
+- **Scorer outside the sandbox.** No agent can read or write the repository, `data_root`, `runs_root` (other workspaces, logs and run records) or `truth_root`. The scripted stand-in runs under an OS sandbox (macOS `sandbox-exec`) that denies those paths, writes outside its workspace and temp directories, and network. Agent CLIs sandbox their own commands with `sandbox-exec`, which cannot start inside such a profile, so they run instead as a separate macOS user (`sandbox.agent_user`) that cannot enter the harness user's home or any of those roots (checked before every run). Each workspace is opened to that user by an ACL for its run only. Every run gets an empty home and temp directory, holding only the CLI's sign-in files; when it ends, all of that user's processes are killed and what it wrote outside the workspace is deleted, so nothing carries over to later runs. The CLI reaches its own API, and its own sandbox must keep agent commands offline, which a recorded network probe per CLI version and command checks before any pre-registered batch.
 - **No test labels or scores.** Test labels live only under `truth_root` (owner-only permissions) and are never staged. Scores are computed after the run and are never returned to the agent.
 - **Limited submissions.** Whatever is at `submission/predictions.csv` when the agent exits or is stopped is copied to the scorer, up to `budgets.submission_limit` per task × condition × model. Links that point outside the workspace are refused.
 - **Fixed budgets.** Wall time is a hard limit (the process group is killed); tokens are logged per CLI; the AutoML baseline gets the same wall-time and GPU budget as the agent (checked by the spec validator).
 - **Pre-registration.** Every non-synthetic batch needs a filled, committed and pushed pre-registration whose YAML block holds the run plan and predictions; `config/` and `tasks/` must be clean, and every spec in the plan must have no FILL fields. One batch per pre-registration commit unless a reason is recorded in the ledger.
-- **Every attempted task reported.** The report lists every task in the batch. It is marked INTERIM until every planned run and baseline has a scored submission.
+- **Every attempted task reported.** The report lists every task in the batch. It is marked INTERIM until every planned run and baseline has a scored submission. There are no exclusions: a run that still errors after `run.max_attempts` gets an empty submission, so every case scores as missing.
 - **Multiple model families, deterministic scoring.** At least two families plus an open-weights model; all scoring is deterministic code.
 - **Provenance.** Each batch manifest records the plan, pre-registration commit, config, resolved specs, SHA-256 of every staged input and of each spec, and each model's command and version. Staged files are re-checked against these checksums at every run. Each run record holds the CLI version, exit status, wall time and token use.
 

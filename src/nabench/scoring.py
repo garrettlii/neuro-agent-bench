@@ -43,16 +43,22 @@ def fmt(t) -> str:
     return f"{p:.3f} [{lo:.3f}, {hi:.3f}]" if np.isfinite(lo) else f"{p:.3f}"
 
 
+CACHED_INPUT = ("cache_creation_input_tokens", "cache_read_input_tokens")  # Claude counts these apart from input_tokens;
+# Codex's input_tokens already includes its cached_input_tokens
+
+
 def _tokens(records) -> str:
     us = [r["tokens"] for r in records if r.get("tokens")]
     if not us:
         return "n/a"
-    return f"{sum(u.get('input_tokens', 0) for u in us):,.0f} / {sum(u.get('output_tokens', 0) for u in us):,.0f}"
+    tokens_in = sum(u.get("input_tokens", 0) + sum(u.get(k, 0) for k in CACHED_INPUT) for u in us)
+    return f"{tokens_in:,.0f} / {sum(u.get('output_tokens', 0) for u in us):,.0f}"
 
 
 def completeness(manifest: dict, submissions: list[dict], runs: list[dict]) -> dict:
     planned = [r["run_id"] for r in manifest["runs"]]
     planned += [run_id(t, "baseline", k, 1) for t in manifest["specs"] for k in BASELINES]
+    planned += [run_id(t, "reference", r["name"], 1) for t, s in manifest["specs"].items() for r in s.get("references", [])]
     done = {s["run_id"] for s in submissions}
     errors = {r["run_id"] for r in runs if r["status"] == "error"} - done
     return {"planned": len(planned), "submitted": len(done & set(planned)),
@@ -94,18 +100,31 @@ def score_batch(cfg: dict, batch_id: str, out_dir: Path = REPORTS, n_boot: int =
                       float(ratio(a.mean(), S.mean(), ref_scores.mean())))
 
         pub = spec["baselines"]["sota"]["published"]
+        P = pub["value"] if isinstance(pub["value"], (int, float)) else None
+
+        def vs_pub(a):  # the published SOTA value in place of the rerun (D-007); the rerun stays primary
+            if P is None:
+                return "n/a"
+            return fmt(ci(ratio(a[idx].mean(1), S[idx].mean(1), P), float(ratio(a.mean(), S.mean(), P))))
+
         sections += [f"Metric: {spec['metric']['description']} ({len(truth)} test cases). "
                      f"SOTA rerun ({spec['baselines']['sota']['name']}): {O.mean():.3f}; published: "
-                     f"{pub['value'] if pub['value'] is not None else 'none'} ({pub['source']}).", "",
-                     "| run | condition | model | reps | raw | normalized vs SOTA | normalized vs ceiling | missing cases | tokens in / out | wall s (mean) | GPU-h |",
-                     "|---|---|---|---|---|---|---|---|---|---|---|"]
+                     f"{pub['value'] if pub['value'] is not None else 'none'} ({pub['source']})."
+                     + (f" Hardware: {spec['baselines']['sota']['hardware']}" if "hardware" in spec["baselines"]["sota"] else ""), "",
+                     "| run | condition | model | reps | raw | normalized vs SOTA | normalized vs published SOTA | normalized vs ceiling | missing cases | tokens in / out | wall s (mean) | GPU-h |",
+                     "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for k in BASELINES:
             a = base[k]
             if a is not None:
-                sections.append(f"| baseline | - | {k} | 1 | {a.mean():.3f} | {fmt(norm(a, O))} | "
+                sections.append(f"| baseline | - | {k} | 1 | {a.mean():.3f} | {fmt(norm(a, O))} | {vs_pub(a)} | "
                                 f"{fmt(norm(a, C)) if C is not None else 'n/a'} | - | - | - | - |")
+        refs = {r["name"]: r for r in spec.get("references", [])}
+        ref_scores = {n: per_case[run_id(task, "reference", n, 1)] for n in refs if run_id(task, "reference", n, 1) in per_case}
+        for n, a in ref_scores.items():
+            sections.append(f"| reference | - | {n} | 1 | {a.mean():.3f} | {fmt(norm(a, O))} | {vs_pub(a)} | "
+                            f"{fmt(norm(a, C)) if C is not None else 'n/a'} | - | - | - | - |")
         if C is not None:
-            sections.append(f"| ceiling | - | {spec['noise_ceiling']['method']} | - | {C.mean():.3f} | {fmt(norm(C, O))} | 1.000 | - | - | - | - |")
+            sections.append(f"| ceiling | - | {spec['noise_ceiling']['method']} | - | {C.mean():.3f} | {fmt(norm(C, O))} | {vs_pub(C)} | 1.000 | - | - | - | - |")
         groups = {}
         for r in (r for r in manifest["runs"] if r["task"] == task and r["run_id"] in per_case):
             groups.setdefault((r["condition"], r["model"]), []).append(r["run_id"])
@@ -119,17 +138,41 @@ def score_batch(cfg: dict, batch_id: str, out_dir: Path = REPORTS, n_boot: int =
             gpu = [r["gpu_hours"] for r in recs if r.get("gpu_hours") is not None]
             draws = ratio(a[idx].mean(1), S[idx].mean(1), O[idx].mean(1))
             norm_draws.setdefault((spec["selection"], cond, model), {})[task] = (draws, float(ratio(a.mean(), S.mean(), O.mean())))
-            sections.append(f"| agent | {cond} | {model} | {len(rids)} | {a.mean():.3f} | {fmt(norm(a, O))} | "
+            sections.append(f"| agent | {cond} | {model} | {len(rids)} | {a.mean():.3f} | {fmt(norm(a, O))} | {vs_pub(a)} | "
                             f"{fmt(norm(a, C)) if C is not None else 'n/a'} | {n_missing} | {_tokens(recs)} | "
                             f"{np.mean(walls):.1f} | {sum(gpu) if gpu else 'n/a'} |")
-        gap_lines = []
-        for x, y in GAPS:
-            for model in sorted({m for c, m in means}):
-                if (x, model) in means and (y, model) in means:
-                    ax, ay = means[(x, model)], means[(y, model)]
-                    d = ratio(ax[idx].mean(1), S[idx].mean(1), O[idx].mean(1)) - ratio(ay[idx].mean(1), S[idx].mean(1), O[idx].mean(1))
-                    gap_lines.append(f"- {model}: {x} - {y} = {fmt(ci(d, float(ratio(ax.mean(), S.mean(), O.mean()) - ratio(ay.mean(), S.mean(), O.mean()))))}")
-        sections += ["", "Gaps between conditions (normalized vs SOTA, paired over cases):" if gap_lines else "", *gap_lines, ""]
+        seeds = [a for n, a in ref_scores.items() if n.startswith("sota_seed")]
+        if seeds:
+            per_seed = np.mean(seeds, axis=0)
+            sections += ["", f"Mean of the {len(seeds)} per-seed SOTA scores (raw, over cases and seeds): "
+                             f"{fmt(ci(per_seed[idx].mean(1), float(per_seed.mean())))}"]
+
+        def gap(a, b):  # normalized a - b, paired over cases
+            return fmt(ci(ratio(a[idx].mean(1), S[idx].mean(1), O[idx].mean(1)) - ratio(b[idx].mean(1), S[idx].mean(1), O[idx].mean(1)),
+                          float(ratio(a.mean(), S.mean(), O.mean()) - ratio(b.mean(), S.mean(), O.mean()))))
+
+        models = list(dict.fromkeys(m for b in manifest["plan"]["blocks"] for m in b["models"]))  # plan order
+        gap_lines = [f"- {m}: {x} - {y} = {gap(means[(x, m)], means[(y, m)])}"
+                     for x, y in GAPS for m in models if (x, m) in means and (y, m) in means]
+        if base["automl"] is not None:
+            gap_lines += [f"- {m}: C2 - automl = {gap(means[('C2', m)], base['automl'])}" for m in models if ("C2", m) in means]
+        for cond in ("C1", "C2"):
+            have = [m for m in models if (cond, m) in means]
+            gap_lines += [f"- {cond}: {a} - {b} = {gap(means[(cond, a)], means[(cond, b)])}" for i, a in enumerate(have) for b in have[i + 1:]]
+        sections += ["", "Gaps (normalized vs SOTA, paired over cases):" if gap_lines else "", *gap_lines, ""]
+
+        signal_free = next((n for n, r in refs.items() if "leakage_margin" in r and n in ref_scores), None)
+        leak_lines = []
+        for m in (m for m in models if ("C3", m) in means):
+            p, lo, _ = norm(means[("C3", m)], O)
+            line, hit = f"- {m}: C3 lower CI bound {lo:.3f}, {'above' if lo > 0 else 'not above'} 0", lo > 0
+            if signal_free:
+                margin, d = refs[signal_free]["leakage_margin"], p - norm(ref_scores[signal_free], O)[0]
+                line += f"; C3 - {signal_free} = {d:.3f}, {'more' if d > margin else 'not more'} than {margin}"
+                hit = hit or d > margin
+            leak_lines.append(f"{line}: {'TRIGGERED' if hit else 'not triggered'}")
+        if leak_lines:
+            sections += ["Leakage check (C3 normalized vs SOTA):", *leak_lines, ""]
 
     agg = ["## Aggregate across tasks", "",
            "Mean normalized score (vs SOTA) over tasks, bootstrap resampling cases within each task. "

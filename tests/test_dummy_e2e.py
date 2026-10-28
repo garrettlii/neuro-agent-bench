@@ -6,7 +6,7 @@ import pytest
 
 from nabench import sandbox
 from nabench.batch import batch_dirs, read_jsonl
-from nabench.runner import create_batch, run_batch
+from nabench.runner import create_batch, run_batch, run_until_done
 from nabench.scoring import score_batch
 
 pytestmark = pytest.mark.skipif(not sandbox.available(), reason="no supported sandbox on this platform")
@@ -44,12 +44,28 @@ def test_dummy_end_to_end(dummy, tmp_path):
     assert len(read_jsonl(truth_dir / "submissions.jsonl")) == 6
 
 
-def test_error_runs_are_retried_and_keep_report_interim(dummy, tmp_path):
+def test_error_runs_are_retried_then_score_as_missing(dummy, tmp_path):
     dummy["models"].append({"name": "broken", "enabled": True, "backend": "cli", "command": ["false", "{prompt}"]})
     batch = create_batch(dummy, {"seed": 0, "blocks": [{"tasks": ["dummy_spikes"], "conditions": ["C1"], "models": ["broken"]}]}, None)
-    for _ in range(dummy["run"]["max_attempts"] + 1):
-        run_batch(dummy, batch)
-    run_dir, _ = batch_dirs(dummy, batch)
-    assert [r["attempt"] for r in read_jsonl(run_dir / "runs.jsonl")] == [1, 2, 3]
-    out, final = score_batch(dummy, batch, out_dir=tmp_path / "reports")
+    run_batch(dummy, batch)
+    out, final = score_batch(dummy, batch, out_dir=tmp_path / "interim")
     assert not final and "1 with errors pending" in out.read_text()
+    for _ in range(dummy["run"]["max_attempts"]):
+        run_batch(dummy, batch)
+    run_dir, truth_dir = batch_dirs(dummy, batch)
+    assert [r["attempt"] for r in read_jsonl(run_dir / "runs.jsonl")] == [1, 2, 3]
+    empty = [s for s in read_jsonl(truth_dir / "submissions.jsonl") if s["model"] == "broken"]
+    assert [s["file"] for s in empty] == [False]  # recorded once, right after the last attempt
+    out, final = score_batch(dummy, batch, out_dir=tmp_path / "final")
+    assert final
+
+
+def test_run_until_done_stops_when_nothing_is_missing(dummy):
+    dummy["models"].append({"name": "broken", "enabled": True, "backend": "cli", "command": ["false", "{prompt}"]})
+    plan = {"seed": 0, "blocks": [{"tasks": ["dummy_spikes"], "conditions": ["C1"], "models": ["broken", "fake-scripted"]}]}
+    batch = create_batch(dummy, plan, None)
+    sleeps = []
+    records = list(run_until_done(dummy, batch, sleep=sleeps.append))
+    assert [(r["model"], r["attempt"]) for r in records] == [("broken", 1), ("fake-scripted", 1), ("broken", 2), ("broken", 3)]
+    assert sleeps == [600, 600]  # no wait after the last attempt
+    assert list(run_until_done(dummy, batch, sleep=sleeps.append)) == [] and len(sleeps) == 2

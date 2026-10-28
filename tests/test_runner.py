@@ -1,8 +1,13 @@
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from nabench.batch import LedgerError, batch_dirs, read_json, read_jsonl
+from nabench import netprobe
+from nabench.backends import make_backend
+from nabench.batch import LedgerError, append_jsonl, batch_dirs, read_json, read_jsonl
 from nabench.runner import RunError, create_batch, expand_plan, stage, submit
 from nabench.spec import TASKS_DIR, SpecError, load_spec, resolve
 
@@ -11,7 +16,15 @@ PREREG = {"path": "prereg/x.md", "commit": "abc123", "committed_at": "2026-10-26
           "plan": PLAN, "predictions": {}}
 
 
+def record_probe(cfg, passed=True, **override):
+    backend = make_backend(next(m for m in cfg["models"] if m["name"] == "fake-scripted"))
+    rec = {"model": "fake-scripted", "version": backend.version(), "backend": backend.describe(), "passed": passed}
+    netprobe.log_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+    append_jsonl(netprobe.log_path(cfg), {**rec, **override})
+
+
 def test_one_batch_per_preregistration(dummy):
+    record_probe(dummy)
     create_batch(dummy, PLAN, PREREG)
     with pytest.raises(LedgerError, match="already generated"):
         create_batch(dummy, PLAN, PREREG)
@@ -21,6 +34,7 @@ def test_one_batch_per_preregistration(dummy):
 
 
 def test_manifest_records_checksums_and_models(dummy):
+    record_probe(dummy)
     batch = create_batch(dummy, PLAN, PREREG)
     run_dir, truth_dir = batch_dirs(dummy, batch)
     m = read_json(run_dir / "manifest.json")
@@ -38,10 +52,45 @@ def test_batch_refusals(dummy, tmp_path):
     (real / "spec.yaml").write_text((TASKS_DIR / "dummy_spikes" / "spec.yaml").read_text().replace("synthetic: true", "synthetic: false"))
     with pytest.raises(RunError, match="not synthetic"):
         create_batch(dummy, PLAN, None, tasks_dir=tmp_path / "tasks")
-    with pytest.raises(RunError, match="not configured or not enabled"):
-        create_batch(dummy, {"blocks": [{"tasks": ["dummy_spikes"], "conditions": ["C1"], "models": ["opus-5.5-cli"]}]}, None)
+    dummy["models"].append({"name": "disabled", "enabled": False, "backend": "cli", "command": ["false", "{prompt}"]})
+    for name in ("disabled", "no-such-model"):
+        with pytest.raises(RunError, match="not configured or not enabled"):
+            create_batch(dummy, {"blocks": [{"tasks": ["dummy_spikes"], "conditions": ["C1"], "models": [name]}]}, None)
     with pytest.raises(RunError, match="submission limit"):
         create_batch(dummy, {"blocks": [{"tasks": ["dummy_spikes"], "conditions": ["C1"], "models": ["fake-scripted"], "reps": 2}]}, None)
+
+
+def test_preregistered_batch_needs_passing_network_probe(dummy):
+    runs_root = Path(dummy["paths"]["runs_root"])
+    refused = lambda: pytest.raises(RunError, match="no passing network probe")
+    with refused():  # no probe recorded
+        create_batch(dummy, PLAN, PREREG)
+    record_probe(dummy, version="nabench.fake_agent (python 0.0)")  # an older CLI version
+    record_probe(dummy, backend={"backend": "scripted", "module": "other", "usage": "last"})  # another command
+    with refused():
+        create_batch(dummy, PLAN, PREREG)
+    record_probe(dummy, passed=False)
+    with refused():
+        create_batch(dummy, PLAN, PREREG)
+    assert not list(runs_root.glob("b-*")) and not (Path(dummy["paths"]["truth_root"]) / "ledger.jsonl").exists()
+    record_probe(dummy)
+    create_batch(dummy, PLAN, PREREG)
+    record_probe(dummy, passed=False)  # the latest probe for this version decides
+    with refused():
+        create_batch(dummy, PLAN, PREREG, reason="rerun")
+    create_batch(dummy, PLAN, None)  # smoke batches need no probe
+
+
+def test_network_probe_script_and_verdict(tmp_path):
+    out = tmp_path / "probe.json"
+    for _ in range(2):  # localhost:443 is closed, so no external traffic; checks the script's output format
+        subprocess.run([sys.executable, "-I", "-c", netprobe.PROBE_SCRIPT, "localhost", str(out)], check=True,
+                       capture_output=True, timeout=60)
+    attempts = json.loads(out.read_text())
+    assert len(attempts) == 2 and netprobe.verdict(attempts)
+    assert attempts[0]["python"] == sys.executable
+    assert not netprobe.verdict(attempts + [{"python": "p", "tcp": "connected", "https": "OSError: blocked"}])
+    assert not netprobe.verdict([]) and not netprobe.verdict(None) and not netprobe.verdict([{"tcp": "x"}])
 
 
 def test_workspace_contents_by_condition(dummy, tmp_path):
@@ -79,3 +128,13 @@ def test_submit_limit_and_symlink_refusal(dummy, tmp_path):
     assert submit(truth_dir, run, ws, limit=2)["file"] is False
     with pytest.raises(RunError, match="submission limit"):
         submit(truth_dir, run, ws, limit=2)
+
+
+def test_unreadable_submission_counts_as_missing(dummy, tmp_path):
+    batch = create_batch(dummy, PLAN, None)
+    _, truth_dir = batch_dirs(dummy, batch)
+    pred = tmp_path / "ws" / "submission" / "predictions.csv"
+    pred.parent.mkdir(parents=True)
+    pred.write_text("case_id,prediction\n")
+    pred.chmod(0)  # what an agent running as another user can do to its own file
+    assert submit(truth_dir, expand_plan(PLAN)[0], tmp_path / "ws", limit=1)["file"] is False

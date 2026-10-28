@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
 
-from . import sandbox
+from . import agentuser, netprobe, sandbox
 from .backends import instruction_files, make_backend, parse_usage
 from .batch import (append_jsonl, batch_dirs, check_ledger, checksums, new_batch_id, now, read_json,
                     read_jsonl, record_batch, sha256_file, write_json)
@@ -30,6 +32,10 @@ BASELINE_CONDITION = {"mode": "program", "tools": "generic", "scrambled": False}
 
 class RunError(RuntimeError):
     pass
+
+
+class NotReady(RuntimeError):
+    """A baseline or reference whose precomputed inputs are not in place yet: skipped, retried on the next pass."""
 
 
 def run_id(task: str, condition: str, model: str, rep: int) -> str:
@@ -80,14 +86,17 @@ def create_batch(cfg: dict, plan: dict, prereg: dict | None, reason: str | None 
         if n > specs[t]["budgets"]["submission_limit"]:
             raise RunError(f"{n} reps of {t}/{c}/{m} exceed the submission limit")
     check_ledger(cfg, prereg, reason)
+    versions = {}
+    for name in sorted({r["model"] for r in runs}):
+        backend = make_backend(models[name], cfg=cfg)
+        versions[name] = {"version": backend.version(), **backend.describe()}
+        if prereg is not None and not netprobe.passed(cfg, name, versions[name]["version"], backend.describe()):
+            raise RunError(f"model {name} has no passing network probe for version {versions[name]['version']!r} "
+                           "and its current command; run scripts/probe_network.py first")
 
     batch_id = new_batch_id("smoke" if prereg is None else "b")
     created = now()
     run_dir, truth_dir = batch_dirs(cfg, batch_id, create=True)
-    versions = {}
-    for name in sorted({r["model"] for r in runs}):
-        backend = make_backend(models[name])
-        versions[name] = {"version": backend.version(), **backend.describe()}
     manifest = {
         "batch_id": batch_id, "created_at": created, "smoke": prereg is None,
         "prereg": prereg and {k: v for k, v in prereg.items() if k not in ("plan", "predictions")},
@@ -138,7 +147,7 @@ def stage(spec: dict, cfg: dict, cond: dict, workspace: Path, seed: int, expecte
     (workspace / "submission").mkdir(parents=True)
     (workspace / "TASK.md").write_text(task_text(spec, cfg, cond))
     if cond.get("scrambled"):
-        ref(spec["scramble"]["function"])(workspace / "data", np.random.default_rng(seed))
+        ref(spec["scramble"]["function"])(workspace / "data", np.random.default_rng(seed), spec)
 
 
 def submit(truth_dir: Path, run: dict, workspace: Path, limit: int, extra: dict | None = None) -> dict:
@@ -152,11 +161,13 @@ def submit(truth_dir: Path, run: dict, workspace: Path, limit: int, extra: dict 
     rec = {**{k: run[k] for k in ("run_id", "task", "condition", "model", "rep")}, "at": now(), **(extra or {})}
     # the agent controls the workspace: refuse links that would make this copy read outside it
     inside = src.resolve().is_relative_to(workspace.resolve()) and not src.is_symlink()
-    if inside and src.is_file() and src.stat().st_size <= MAX_PREDICTION_BYTES:
+    try:
+        if not (inside and src.is_file() and src.stat().st_size <= MAX_PREDICTION_BYTES):
+            raise FileNotFoundError
         shutil.copyfile(src, dest)
         rec.update(file=True, sha256=sha256_file(dest), bytes=dest.stat().st_size)
-    else:
-        rec.update(file=False, reason="missing, symlink or too large")
+    except OSError:  # an agent running as another user can also make the file unreadable
+        rec.update(file=False, reason="missing, unreadable, symlink or too large")
     append_jsonl(log, rec)
     return rec
 
@@ -170,25 +181,38 @@ def run_baselines(cfg: dict, batch_id: str) -> None:
     manifest = read_json(run_dir / "manifest.json")
     done = {s["run_id"] for s in read_jsonl(truth_dir / "submissions.jsonl")}
     for task, spec in manifest["specs"].items():
-        for kind in BASELINES:
-            run = {"task": task, "condition": "baseline", "model": kind, "rep": 1,
-                   "run_id": run_id(task, "baseline", kind, 1)}
+        baseline_ws = {k: run_dir / run_id(task, "baseline", k, 1) / "a1" / "workspace" for k in BASELINES}
+        jobs = [("baseline", k, spec["baselines"][k]) for k in BASELINES]
+        jobs += [("reference", r["name"], r) for r in spec.get("references", [])]  # after the baselines they may read
+        for cond, name, entry in jobs:
+            run = {"task": task, "condition": cond, "model": name, "rep": 1, "run_id": run_id(task, cond, name, 1)}
             if run["run_id"] in done:
                 continue
             ws = run_dir / run["run_id"] / "a1" / "workspace"
             if ws.exists():
                 shutil.rmtree(ws.parent)  # an interrupted baseline left no submission; baselines are deterministic
             stage(spec, cfg, BASELINE_CONDITION, ws, seed=0, expected=manifest["inputs_sha256"][task])
-            bl = spec["baselines"][kind]
-            budget = bl.get("budget", spec["budgets"])
-            preds = ref(bl["function"])(ws, budget)
+            budget = entry.get("budget", spec["budgets"])
+            fn = ref(entry["function"])
+            try:
+                preds = fn(ws, budget) if cond == "baseline" else fn(ws, budget, baseline_ws)
+            except NotReady as e:  # the agent runs go ahead; the report stays interim until it is in place
+                print(f"{run['run_id']}: skipped this pass: {e}")
+                shutil.rmtree(ws.parent)
+                continue
             write_cases(ws / PREDICTIONS, preds)
             submit(truth_dir, run, ws, limit=1)
 
 
+def _out_of_attempts(truth_dir: Path, run: dict, attempts: int) -> None:
+    """No exclusions: an empty submission scores every case as missing (worst value), so the report can become final."""
+    append_jsonl(truth_dir / "submissions.jsonl", {**{k: run[k] for k in ("run_id", "task", "condition", "model", "rep")},
+                                                   "at": now(), "file": False, "reason": f"no submission after {attempts} attempts"})
+
+
 def run_batch(cfg: dict, batch_id: str, only_models: list[str] | None = None) -> list[dict]:
     """Runs every planned run without a submission. Runs that ended in an error are retried
-    on the next call, within the submission limit."""
+    on the next call, within the submission limit; a run out of attempts gets an empty submission."""
     run_dir, truth_dir = batch_dirs(cfg, batch_id)
     manifest = read_json(run_dir / "manifest.json")
     run_baselines(cfg, batch_id)
@@ -200,18 +224,21 @@ def run_batch(cfg: dict, batch_id: str, only_models: list[str] | None = None) ->
             continue
         spec, mcfg = manifest["specs"][run["task"]], models[run["model"]]
         attempt = 1 + sum(r["run_id"] == run["run_id"] for r in read_jsonl(run_dir / "runs.jsonl"))
-        if attempt > cfg["run"]["max_attempts"]:
-            continue  # stays missing, so the report stays interim; the human decides
+        if attempt > cfg["run"]["max_attempts"]:  # only if max_attempts was lowered after the last attempt
+            _out_of_attempts(truth_dir, run, attempt - 1)
+            continue
         base = run_dir / run["run_id"] / f"a{attempt}"
         ws, logs = base / "workspace", base / "logs"
-        stage(spec, cfg, cfg["conditions"][run["condition"]], ws, _seed(manifest["plan"].get("seed", 0), run["run_id"]),
-              expected=manifest["inputs_sha256"][run["task"]])
-        found = instruction_files(ws)
-        if found:
-            raise RunError(f"agent instruction files reachable from the workspace: {found}")
-        backend = make_backend(mcfg, cfg["conditions"][run["condition"]]["mode"])
-        wrap = sandbox.wrapper(cfg, ws, network=mcfg.get("sandbox_network", False))
-        res = backend.run(cfg["prompt"], ws, timeout_s=spec["budgets"]["wall_time_s"], wrap=wrap)
+        isolated = mcfg.get("isolation") == "agent_user"
+        with agentuser.workspace(cfg, ws, mcfg.get("keep", [])) if isolated else nullcontext(ws) as live:
+            stage(spec, cfg, cfg["conditions"][run["condition"]], live, _seed(manifest["plan"].get("seed", 0), run["run_id"]),
+                  expected=manifest["inputs_sha256"][run["task"]])
+            found = instruction_files(live)
+            if found:
+                raise RunError(f"agent instruction files reachable from the workspace: {found}")
+            backend = make_backend(mcfg, cfg["conditions"][run["condition"]]["mode"], cfg)
+            wrap = None if isolated else sandbox.wrapper(cfg, live, network=mcfg.get("sandbox_network", False))
+            res = backend.run(cfg["prompt"], live, timeout_s=spec["budgets"]["wall_time_s"], wrap=wrap)
         logs.mkdir(parents=True)
         (logs / "stdout.txt").write_text(res.stdout)
         (logs / "stderr.txt").write_text(res.stderr)
@@ -225,4 +252,19 @@ def run_batch(cfg: dict, batch_id: str, only_models: list[str] | None = None) ->
             rec["submitted"] = sub["file"]
         append_jsonl(run_dir / "runs.jsonl", rec)
         records.append(rec)
+        if status == "error" and attempt >= cfg["run"]["max_attempts"]:
+            _out_of_attempts(truth_dir, run, attempt)
     return records
+
+
+def run_until_done(cfg: dict, batch_id: str, only_models: list[str] | None = None, sleep=time.sleep):
+    """Calls run_batch every run.retry_interval_s seconds until no planned run (of these models) is missing.
+    Ends: each pass submits a run or uses one of its attempts, and a run out of attempts gets an empty submission."""
+    run_dir, truth_dir = batch_dirs(cfg, batch_id)
+    runs = [r for r in read_json(run_dir / "manifest.json")["runs"] if not only_models or r["model"] in only_models]
+    while True:
+        yield from run_batch(cfg, batch_id, only_models)
+        done = {s["run_id"] for s in read_jsonl(truth_dir / "submissions.jsonl")}
+        if all(r["run_id"] in done for r in runs):
+            return
+        sleep(cfg["run"]["retry_interval_s"])

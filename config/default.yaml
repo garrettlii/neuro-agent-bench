@@ -9,9 +9,17 @@ sandbox:
   deny_extra: [~/dark-gene-bench, ~/dgb-data, ~/dgb-runs, ~/dgb-truth]
   # CLI state directories the agent CLI itself must write to.
   extra_write: [~/.claude-bench, ~/.codex-bench]
+  # Models with `isolation: agent_user` run as this macOS user instead of under sandbox-exec, because their CLIs'
+  # own sandboxes cannot start inside it (src/nabench/agentuser.py). One-time setup: scripts/setup_agent_user.sh.
+  agent_user: nabagent
+  agent_root: /Users/Shared/nab-agent/workspaces   # workspaces during a run; moved to runs_root afterwards
+  agent_home: /Users/Shared/nab-agent/run/home     # HOME and TMPDIR of every run; emptied before and after each run
+  agent_keep: /Users/Shared/nab-agent/keep         # models[].keep sign-in files between runs; unreadable to the agent user
+  agent_path: /Users/Shared/nab-agent/bin:/Users/Shared/nab-agent/venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 run:
-  max_attempts: 3   # attempts per run that ended in an error; then the run stays missing and the report interim
+  max_attempts: 3   # attempts per run that ended in an error; then an empty submission scores every case as missing
+  retry_interval_s: 600   # run_batch.py --until-done waits this long between passes
 
 # Identical for every model and condition; the task itself is in the workspace's TASK.md.
 prompt: "Read TASK.md in the current directory and complete the task it describes. Work only inside the current directory."
@@ -42,34 +50,39 @@ models:
   # Agent CLIs use workspace sign-ins. Confirm every flag with `claude --help` and `codex exec --help`
   # before the first run, and smoke-test on the dummy task only.
   - name: opus-5.5-cli
-    enabled: false
+    enabled: true
     backend: cli
     cutoff_date: "2026-07-01"
     version_command: ["claude", "--version"]
     command: ["claude", "-p", "{prompt}", "--model", "claude-opus-5-5", "--output-format", "json",
               "--permission-mode", "bypassPermissions", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep",
-              "--disallowedTools", "WebFetch,WebSearch,Task", "--strict-mcp-config", "--no-session-persistence"]
+              "--disallowedTools", "WebFetch,WebSearch,Task", "--strict-mcp-config", "--no-session-persistence",
+              "--settings", '{"sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "network": {"allowedDomains": [], "strictAllowlist": true}}}']
     command_native: ["claude", "-p", "{prompt}", "--model", "claude-opus-5-5", "--output-format", "json",
                      "--permission-mode", "bypassPermissions", "--allowedTools", "Read,Write,Glob,Grep",
                      "--disallowedTools", "Bash,Edit,WebFetch,WebSearch,Task", "--strict-mcp-config", "--no-session-persistence"]
     usage: last                # one JSON result object with a `usage` field
-    sandbox_network: true      # the CLI needs its API; the OS sandbox still confines files
+    isolation: agent_user      # the CLI reaches its API; its own sandbox (--settings) keeps agent commands offline
     env:
-      CLAUDE_CONFIG_DIR: ~/.claude-bench
+      CLAUDE_CONFIG_DIR: ~/.claude-bench   # ~ is sandbox.agent_home
+    keep: [.claude-bench/.credentials.json, .claude-bench/.claude.json]   # the only files carried between runs
+    login_command: [claude, auth, login]   # scripts/agent_login.py
   - name: sol-6.1-cli
-    enabled: false
+    enabled: true
     backend: cli
     cutoff_date: "2026-05-01"
     version_command: ["codex", "--version"]
     command: ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write",
               "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"xhigh\"", "--disable", "apps", "--disable", "plugins",
               "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "multi_agent",
+              "-c", "sandbox_workspace_write.network_access=false", "-c", "web_search=\"disabled\"",
               "--json", "--color", "never", "{prompt}"]
-    command_native: ["<<FILL: codex invocation that can write files but not run commands>>", "{prompt}"]
     usage: sum                 # JSONL events; per-turn `usage` objects are summed
-    sandbox_network: true      # codex's workspace-write sandbox keeps agent commands offline
+    isolation: agent_user      # the CLI reaches its API; workspace-write with network_access=false keeps agent commands offline
     env:
-      CODEX_HOME: ~/.codex-bench
+      CODEX_HOME: ~/.codex-bench           # ~ is sandbox.agent_home
+    keep: [.codex-bench/auth.json]
+    login_command: [codex, login]
   - name: open-weights-cli
     enabled: false
     backend: cli

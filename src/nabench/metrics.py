@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 MAX_PREDICTION_BYTES = 50 << 20
+csv.field_size_limit(MAX_PREDICTION_BYTES)  # a case's value can be a long trace (bwb: 50 frames per test trial); the default is 128 KiB
 
 
 def read_cases(path: str | Path, column: str) -> dict[str, str]:

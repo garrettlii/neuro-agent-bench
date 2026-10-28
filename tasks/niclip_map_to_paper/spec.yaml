@@ -1,46 +1,60 @@
 # Pilot task, chosen before the selection rule (docs/TASK_SELECTION.md); reported separately.
-# Stub: every FILL must be resolved through the audit (see audits/niclip_map_to_paper.md: what the agent sees about each candidate, coordinate-reconstruction baseline) before the spec is frozen.
+# Draft fill. Remaining <<FILL values are owner decisions or facts still to look up.
+# This pilot cannot pass rule (a); niclip_post_cutoff in the TASK_SELECTION.md registry is the candidate that can.
 id: niclip_map_to_paper
 selection: pilot_pre_rule
 modality: fmri
 source:
-  name: "<<FILL: NiCLIP: exact dataset name and version>>"
-  url: "<<FILL: dataset URL>>"
-  licence: "<<FILL: licence, and whether redistribution of a private split is allowed>>"
-  released: {data: "<<FILL: YYYY-MM-DD data release>>", test_labels: "<<FILL: YYYY-MM-DD, never or unknown>>"}
-question: "<<FILL: agent-facing task text. Draft: Given a brain activation map, rank the candidate papers by how likely each reported it.>>"
-prediction_format: "<<FILL: agent-facing description of the prediction column>>"
+  name: "<<FILL: corpus the 1,038 pilot maps came from (e.g. NeuroStore/Neurosynth release and version), MKDA kernel settings, candidate-set construction>>"
+  url: "<<FILL: corpus URL>>"
+  licence: "<<FILL: corpus licence; abstracts may be copyrighted, so check redistribution before D8>>"
+  released:
+    data: "<<FILL: corpus release date>>"
+    test_labels: "<<FILL: same as data; each map's source paper is the corpus record itself>>"
+question: |
+  Each test case is a brain activation map built from the peak coordinates one published fMRI study reported, smoothed
+  with a fixed kernel. You also get a list of candidate papers with their titles and abstracts. Exactly one candidate
+  reported the coordinates behind the map. For each case, identify that paper.
+prediction_format: "`prediction` is the ID (from test/candidates.csv) of the candidate paper you judge most likely to have produced the map."
 data:
-  dev_inputs: "<<FILL: {data_root}/tasks/niclip_map_to_paper/dev/... input files>>"
-  dev_labels: "<<FILL: {data_root}/tasks/niclip_map_to_paper/dev/... label files>>"
-  test_inputs: "<<FILL: {data_root}/tasks/niclip_map_to_paper/test/... input files, no labels>>"
-  truth: "<<FILL: {truth_root}/tasks/niclip_map_to_paper/test_labels.csv>>"
+  dev_inputs: ["{data_root}/tasks/niclip_map_to_paper/dev/maps.npz", "{data_root}/tasks/niclip_map_to_paper/dev/candidates.csv"]
+  dev_labels: ["{data_root}/tasks/niclip_map_to_paper/dev/labels.csv"]
+  test_inputs: ["{data_root}/tasks/niclip_map_to_paper/test/maps.npz", "{data_root}/tasks/niclip_map_to_paper/test/candidates.csv", "{data_root}/tasks/niclip_map_to_paper/test/case_ids.csv"]
+  truth: "{truth_root}/tasks/niclip_map_to_paper/test_labels.csv"
 metric:
-  function: "<<FILL: package.module:function in src/nabench returning per-case scores>>"
-  higher_is_better: "<<FILL: true or false>>"
-  description: "<<FILL: metric name and definition>>"
+  function: "nabench.metrics:accuracy"
+  higher_is_better: true
+  description: "Top-1 accuracy among the stated candidate set; no secondary metric in the scored run"
 baselines:
-  simple: {function: "<<FILL: module:function>>", description: "<<FILL: simple baseline>>"}
+  simple: {function: "nabench.tasks.niclip_map_to_paper:simple_baseline", description: "Correlation decoder against Neurosynth-style term maps, candidates ranked by overlap of top terms with title and abstract"}
   sota:
-    name: "<<FILL: published SOTA method>>"
-    code: "<<FILL: repository URL and commit>>"
-    function: "<<FILL: module:function that reruns it on this split>>"
-    published: {value: "<<FILL: published number on this split and metric>>", source: "<<FILL: paper, table>>"}
+    name: "NiCLIP or NeuroConText map-to-text retrieval, whichever scores higher on the dev split (chosen before any agent run)"
+    code: "https://github.com/NBCLab/brain-decoder @ <<FILL: commit>> (Apache-2.0); NeuroConText https://github.com/ghayem/NeuroConText @ <<FILL: commit>> (no licence file; used locally for the pilot; ask its authors for a licence before D8)"
+    function: "nabench.tasks.niclip_map_to_paper:sota_baseline"
+    published: {value: null, source: "No published number for this candidate set and metric; the pilot's 0.135 was measured here and must be rerun on the frozen set"}
   automl:
-    function: "<<FILL: module:function>>"
-    budget: {wall_time_s: "<<FILL: equal to budgets.wall_time_s>>", gpu_hours: "<<FILL: equal to budgets.gpu_hours>>"}
+    function: "nabench.tasks.niclip_map_to_paper:automl_baseline"
+    budget: {wall_time_s: 14400, gpu_hours: 4}
 noise_ceiling:
-  method: "<<FILL: noise-ceiling method, or none>>"
-  function: "<<FILL: module:function, or null if no ceiling exists>>"
-budgets: {tokens: "<<FILL: logged token budget>>", wall_time_s: "<<FILL: hard limit per run>>", gpu_hours: "<<FILL: at most about 24>>", submission_limit: "<<FILL: scored submissions per condition and model>>"}
+  method: none
+  function: null
+budgets:
+  tokens: 3000000
+  wall_time_s: 14400
+  gpu_hours: 4
+  submission_limit: 3
 tools:
-  generic: "<<FILL: generic packages available in the workspace>>"
-  trained_models: "<<FILL: list of trained-model tools: name, files, call, interface>>"
+  generic: [python, numpy, scipy, pandas, scikit-learn, nibabel, nilearn]
+  trained_models: "<<FILL: written with the task code. Owner decision 2026-10-27: niclip and neurocontext checkpoints with a rank-candidates wrapper. Stage weight files only, never the brain-decoder repo (it contains .claude/skills). Never staged in any condition: Neurosynth, NeuroQuery or NeuroStore coordinate tables, full texts, DOIs or PMIDs>>"
 scramble:
-  method: "<<FILL: label_permutation, phase_randomization or other>>"
-  function: "<<FILL: module:function>>"
-  description: "<<FILL: what is scrambled in dev and test inputs>>"
+  method: other
+  function: "nabench.tasks.niclip_map_to_paper:scramble"
+  description: >-
+    Each map replaced by an MKDA map of random grey-matter coordinates with the same number of peaks, in dev and test;
+    candidate lists reordered. Skill above the simple baseline means the answer came from metadata or order.
 contamination:
-  model_cutoffs_vs_release: "<<FILL: each evaluated model cutoff vs data and label release dates>>"
-  test_labels_public: "<<FILL: true, false or unknown>>"
-  split_provenance: "<<FILL: who made the split, from which subjects or sessions, and whether a private re-split is possible>>"
+  model_cutoffs_vs_release: >-
+    Opus 5.5 cutoff 2026-07-01 and Sol 6.1 2026-05-01 (config/default.yaml). <<FILL: every pilot source paper's
+    publication date; expected all before both cutoffs, so the papers and possibly their coordinate tables are in training data>>
+  test_labels_public: true
+  split_provenance: "<<FILL: how the 1,038 maps and their candidate sets were drawn, by whom, with what seed>>"

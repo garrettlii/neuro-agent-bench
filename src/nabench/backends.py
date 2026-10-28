@@ -8,6 +8,7 @@ mechanics, so the harness can be tested end to end without a model call.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -18,6 +19,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+from . import agentuser
 
 INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md", "GEMINI.md")
 
@@ -67,18 +70,21 @@ class CLIBackend:
     name = "cli"
 
     def __init__(self, command: list[str], env: dict[str, str] | None = None,
-                 version_command: list[str] | None = None, usage: str | None = None):
+                 version_command: list[str] | None = None, usage: str | None = None,
+                 kill_command: list[str] | None = None):
         if not any("{prompt}" in part for part in command):
             raise ValueError("CLI command template must contain {prompt}")
         self.command = command
         self.env = {k: os.path.expanduser(v) for k, v in (env or {}).items()}
         self.version_command = version_command
         self.usage = usage
+        self.kill_command = kill_command  # for agents running as another user, which killpg cannot reach
 
     def version(self) -> str | None:
         if not self.version_command:
             return None
-        proc = subprocess.run(self.version_command, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        # from /: an agent user cannot enter the harness's working directory, and some CLIs fail without one
+        proc = subprocess.run(self.version_command, capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd="/")
         return (proc.stdout or proc.stderr).strip()
 
     def run(self, prompt: str, workdir: str | Path, timeout_s: float,
@@ -95,7 +101,10 @@ class CLIBackend:
             out, err = proc.communicate(timeout=timeout_s)
             timed_out = False
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError, PermissionError):  # left only with another user's processes
+                os.killpg(proc.pid, signal.SIGKILL)
+            if self.kill_command:
+                subprocess.run(self.kill_command, capture_output=True, stdin=subprocess.DEVNULL)
             out, err = proc.communicate()
             timed_out = True
         return RunResult(None if timed_out else proc.returncode, out, err, time.time() - start, timed_out)
@@ -120,11 +129,16 @@ class ScriptedBackend(CLIBackend):
         return {"backend": self.name, "module": self.module, "usage": self.usage}
 
 
-def make_backend(model_cfg: dict, mode: str = "program") -> CLIBackend:
-    """Native mode needs its own `command_native` template with code execution disabled."""
+def make_backend(model_cfg: dict, mode: str = "program", cfg: dict | None = None) -> CLIBackend:
+    """Native mode needs its own `command_native` template with code execution disabled.
+    `isolation: agent_user` runs the CLI, and its version command, as cfg's agent user (nabench.agentuser)."""
     kind = model_cfg["backend"]
     if kind == "cli":
         command = model_cfg["command"] if mode != "native" else model_cfg["command_native"]
+        if model_cfg.get("isolation") == "agent_user":
+            pre, version = agentuser.prefix(cfg, model_cfg.get("env")), model_cfg.get("version_command")
+            return CLIBackend(pre + command, version_command=version and pre + version, usage=model_cfg.get("usage"),
+                              kill_command=agentuser.kill_command(cfg))
         return CLIBackend(command, env=model_cfg.get("env"),
                           version_command=model_cfg.get("version_command"), usage=model_cfg.get("usage"))
     if kind == "scripted":

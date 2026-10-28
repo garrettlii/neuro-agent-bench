@@ -1,46 +1,70 @@
 # Pilot task, chosen before the selection rule (docs/TASK_SELECTION.md); reported separately.
-# Stub: every FILL must be resolved through the audit (see audits/nsd_cross_subject_id.md: candidate-set size, alignment data) before the spec is frozen.
+# Draft fill. Remaining <<FILL values are owner decisions or facts still to look up.
 id: nsd_cross_subject_id
 selection: pilot_pre_rule
 modality: fmri
 source:
-  name: "<<FILL: Natural Scenes Dataset (NSD): exact dataset name and version>>"
-  url: "<<FILL: dataset URL>>"
-  licence: "<<FILL: licence, and whether redistribution of a private split is allowed>>"
-  released: {data: "<<FILL: YYYY-MM-DD data release>>", test_labels: "<<FILL: YYYY-MM-DD, never or unknown>>"}
-question: "<<FILL: agent-facing task text. Draft: Identify which candidate image a held-out subject was viewing from their fMRI response.>>"
-prediction_format: "<<FILL: agent-facing description of the prediction column>>"
+  name: >-
+    Natural Scenes Dataset (Allen et al. 2022, Nature Neuroscience), NSD-core single-trial betas
+    betas_fithrf_GLMdenoise_RR, func1pt8mm; Subjects 1, 2, 5 and 7 (all 40 sessions); the held-out subject drawn with
+    the plan seed before any run
+  url: https://naturalscenesdataset.org (data s3://natural-scenes-dataset)
+  licence: >-
+    NSD Terms and Conditions (custom data-use agreement, not an open licence): research and educational use only; "I will
+    not distribute this dataset or its components to any other individual or entity"; no clause on derived data or
+    splits. Treat redistribution of any derived split as not allowed unless CMRR confirms otherwise; this affects the
+    public release (D8).
+  released:
+    data: "2021-09-03"
+    test_labels: "<<FILL: 2021-09-03 for trials in the first release; 2023-08-20 for the last three core sessions per subject, withheld for Algonauts 2023 and since released>>"
+question: |
+  Several people viewed natural photographs while their brain activity was measured with 7T fMRI. Each test case is one
+  fMRI response from a person whose responses to the test images you have never seen, together with a set of candidate
+  images, exactly one of which the person was viewing. Development data hold responses with image labels from the other
+  people and from this person's responses to non-test images. For each test case, identify the image being viewed.
+prediction_format: "`prediction` is the candidate image ID (as listed in test/candidates.csv for that case) you judge most likely."
 data:
-  dev_inputs: "<<FILL: {data_root}/tasks/nsd_cross_subject_id/dev/... input files>>"
-  dev_labels: "<<FILL: {data_root}/tasks/nsd_cross_subject_id/dev/... label files>>"
-  test_inputs: "<<FILL: {data_root}/tasks/nsd_cross_subject_id/test/... input files, no labels>>"
-  truth: "<<FILL: {truth_root}/tasks/nsd_cross_subject_id/test_labels.csv>>"
+  dev_inputs: ["{data_root}/tasks/nsd_cross_subject_id/dev/responses.npz", "{data_root}/tasks/nsd_cross_subject_id/dev/images.npz"]
+  dev_labels: ["{data_root}/tasks/nsd_cross_subject_id/dev/labels.csv"]
+  test_inputs: ["{data_root}/tasks/nsd_cross_subject_id/test/responses.npz", "{data_root}/tasks/nsd_cross_subject_id/test/candidates.csv", "{data_root}/tasks/nsd_cross_subject_id/test/images.npz", "{data_root}/tasks/nsd_cross_subject_id/test/case_ids.csv"]
+  truth: "{truth_root}/tasks/nsd_cross_subject_id/test_labels.csv"
 metric:
-  function: "<<FILL: package.module:function in src/nabench returning per-case scores>>"
-  higher_is_better: "<<FILL: true or false>>"
-  description: "<<FILL: metric name and definition>>"
+  function: "nabench.metrics:accuracy"
+  higher_is_better: true
+  description: >-
+    Top-1 identification among all images in the test half of the shared set, one candidate set for every case;
+    chance = 1/N. Report the pilot's candidate-set size separately for comparison.
 baselines:
-  simple: {function: "<<FILL: module:function>>", description: "<<FILL: simple baseline>>"}
+  simple: {function: "nabench.tasks.nsd_cross_subject_id:simple_baseline", description: "Ridge regression from aligned responses to low-level image features (downsampled grayscale pixels after PCA), identification by correlation"}
   sota:
-    name: "<<FILL: published SOTA method>>"
+    name: "<<FILL: the pilot's pretrained cross-subject decoder>>"
     code: "<<FILL: repository URL and commit>>"
-    function: "<<FILL: module:function that reruns it on this split>>"
-    published: {value: "<<FILL: published number on this split and metric>>", source: "<<FILL: paper, table>>"}
+    function: "nabench.tasks.nsd_cross_subject_id:sota_baseline"
+    published: {value: "<<FILL: number measured on this exact candidate set; the pilot's 0.654 only if its candidate set matches>>", source: "<<FILL: paper and table, or 'measured here'>>"}
   automl:
-    function: "<<FILL: module:function>>"
-    budget: {wall_time_s: "<<FILL: equal to budgets.wall_time_s>>", gpu_hours: "<<FILL: equal to budgets.gpu_hours>>"}
+    function: "nabench.tasks.nsd_cross_subject_id:automl_baseline"
+    budget: {wall_time_s: 14400, gpu_hours: 4}
 noise_ceiling:
-  method: "<<FILL: noise-ceiling method, or none>>"
-  function: "<<FILL: module:function, or null if no ceiling exists>>"
-budgets: {tokens: "<<FILL: logged token budget>>", wall_time_s: "<<FILL: hard limit per run>>", gpu_hours: "<<FILL: at most about 24>>", submission_limit: "<<FILL: scored submissions per condition and model>>"}
+  method: none
+  function: null
+budgets:
+  tokens: 3000000
+  wall_time_s: 14400
+  gpu_hours: 4
+  submission_limit: 3
 tools:
-  generic: "<<FILL: generic packages available in the workspace>>"
-  trained_models: "<<FILL: list of trained-model tools: name, files, call, interface>>"
+  generic: [python, numpy, scipy, pandas, scikit-learn, torch]
+  trained_models: "<<FILL: the pretrained decoder, written with the task code. Owner decision 2026-10-27: every pretrained network, general image encoders included, is a trained-model tool and is removed in C2.>>"
 scramble:
-  method: "<<FILL: label_permutation, phase_randomization or other>>"
-  function: "<<FILL: module:function>>"
-  description: "<<FILL: what is scrambled in dev and test inputs>>"
+  method: label_permutation
+  function: "nabench.tasks.nsd_cross_subject_id:scramble"
+  description: Dev labels permuted across dev trials within each subject; test responses permuted across test cases.
 contamination:
-  model_cutoffs_vs_release: "<<FILL: each evaluated model cutoff vs data and label release dates>>"
-  test_labels_public: "<<FILL: true, false or unknown>>"
-  split_provenance: "<<FILL: who made the split, from which subjects or sessions, and whether a private re-split is possible>>"
+  model_cutoffs_vs_release: >-
+    Opus 5.5 cutoff 2026-07-01 and Sol 6.1 2026-05-01 (config/default.yaml). NSD-core public since 2021-09-03, except the
+    last three core sessions per subject, public since 2023-08-20; all before both cutoffs. Images are from COCO. Whether
+    models memorized the trial-to-image design is untested (C3 is the check); retrieval is possible with network access.
+  test_labels_public: true  # no NSD-core session is still withheld (released 2023-08-20)
+  split_provenance: >-
+    Shared images seen by all four subjects split 50/50 at random with the plan seed into an alignment half and a test
+    half. The held-out subject's responses to test-half images are never used for alignment or training.
