@@ -6,7 +6,7 @@ paths:
 
 sandbox:
   # The agent can never read these either (related projects with design docs or answer keys).
-  deny_extra: [~/benchmarks/dgb]
+  deny_extra: [~/benchmarks/dgb, ~/benchmarks/pf, ~/benchmarks/brb]
   # CLI state directories the agent CLI itself must write to.
   extra_write: [~/.claude-bench, ~/.codex-bench]
   # Models with `isolation: agent_user` run as this macOS user instead of under sandbox-exec, because their CLIs'
