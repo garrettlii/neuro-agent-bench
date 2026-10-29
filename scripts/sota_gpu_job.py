@@ -23,6 +23,12 @@ OUT/provenance.json (each seed's GPU, precision, start and end, and the job's ov
 OUT/MANIFEST.sha256. It refuses parts from another export, missing or repeated seeds, and a job over 4 h. Bring OUT
 back and run `scripts/sota_gpu.py import OUT` on the harness. No labels are in the export; scoring happens on the
 harness.
+
+--trainval (exploratory, D-022; not the SOTA baseline): for each session and seed, the fit above (train trials,
+best epoch on val), then POYO+ finetuned afresh from the checkpoint on train+val for that best epoch's count, at the
+same schedule (OneCycleLR over 300 epochs, backbone frozen until epoch 40), its final weights predicting test. It
+writes PART/seeds/seed<k>.csv (the train-only fit), PART/trainval/seed<k>.csv and each fit's epoch count in
+PART/part.json, has no time limit, and --merge refuses its parts.
 """
 import argparse
 import datetime as dt
@@ -70,9 +76,12 @@ ap.add_argument("out", nargs="?", help="PART for a run, OUT for --merge")
 ap.add_argument("--seeds", nargs="+", type=int, choices=range(1, 6), metavar="S", help="seeds to run (1-5; default all)")
 ap.add_argument("--merge", nargs="+", metavar="PART", help="merge these parts into OUT")
 ap.add_argument("--smoke", action="store_true")
+ap.add_argument("--trainval", action="store_true", help="the exploratory train+val variant (D-022)")
 args = ap.parse_args()
 if not args.smoke and not args.out:
     ap.error("PART or OUT is required without --smoke")
+if args.trainval and (args.merge or args.smoke):
+    ap.error("--trainval runs seeds; it does not merge or smoke")
 exp = Path(args.export).resolve()
 out = Path(args.out).resolve() if args.out else None
 if out and out.exists():
@@ -157,6 +166,28 @@ def fit(cid: str, k: int, deadline: float, targets=None, **kw):
                              seed=bwb.EVAL_SEEDS[k - 1], device=device, name=cid, epoch_log=kw.pop("epoch_log", tick), **kw)[1]
 
 
+def fit_trainval(cid: str, k: int):
+    """--trainval: fit's prediction, the train+val refit's after fit's best epoch count, and that count. The refit is
+    poyo_finetune with all dev trials as train and the test trials in the validation slot, stopped by
+    rule.stop_after; nothing else in it changes."""
+    import numpy as np
+
+    scores = []
+    pred = fit(cid, k, float("inf"), epoch_log=lambda e, s: scores.append(s))
+    epochs = rule.best_epoch(scores) + 1
+    c, r2 = cases[cid], bwb.pooled_r2
+    bwb.pooled_r2 = rule.stop_after(epochs)
+    try:
+        bwb.poyo_finetune(ckpt, src, c["dev"], c["y"], c["test"], np.zeros((len(c["test"]), bwb.N_FRAMES), np.float32),
+                          [], c["n_units"], base_lr=bwb._published(root, "poyo_plus_lrs.json", cid)["base_lr"],
+                          seed=bwb.EVAL_SEEDS[k - 1], device=device, name=cid)
+    except rule.Stop as done:
+        return pred, done.pred, epochs
+    finally:
+        bwb.pooled_r2 = r2
+    raise RuntimeError(f"{cid}: the train+val refit stopped before {epochs} epochs")
+
+
 if args.smoke:
     # 42 epochs of one session: epochs 2-39 train only the embeddings, epochs 40-41 everything (poyo_finetune)
     cid = next(iter(cases))
@@ -179,11 +210,15 @@ if args.smoke:
     sys.exit(0)
 
 seeds = sorted(set(args.seeds or rule.ALL_SEEDS))
-deadline, results, record = START + rule.LIMIT_S, {}, {}
+deadline, results, record, variant, epochs = START + rule.LIMIT_S, {}, {}, {}, {}
 for i, k in enumerate(seeds):
     t, started = time.time(), now()
     try:
-        results[k] = {cid: fit(cid, k, deadline) for cid in cases}
+        if args.trainval:
+            runs = {cid: fit_trainval(cid, k) for cid in cases}
+            results[k], variant[k], epochs[str(k)] = ({cid: r[j] for cid, r in runs.items()} for j in range(3))
+        else:
+            results[k] = {cid: fit(cid, k, deadline) for cid in cases}
     except rule.TimeUp:
         stop(f"seed {k} did not finish all {len(cases)} sessions within {rule.LIMIT_S} s of this process's start on "
              f"{gpu} ({precision}); nothing written. Under D-019 the job stops and nothing is imported" +
@@ -194,10 +229,15 @@ for i, k in enumerate(seeds):
 (out / "seeds").mkdir(parents=True)
 for k, preds in results.items():
     bwb.write_cases(out / "seeds" / f"seed{k}.csv", {cid: bwb._fmt(p) for cid, p in preds.items()})
+if variant:
+    (out / "trainval").mkdir()
+    for k, preds in variant.items():
+        bwb.write_cases(out / "trainval" / f"seed{k}.csv", {cid: bwb._fmt(p) for cid, p in preds.items()})
 (out / "part.json").write_text(json.dumps({
     "inputs_sha256": {rel: listed[f"workspace/data/{rel}"] for rel in bwb.SOTA_INPUTS},
     "export_manifest_sha256": sha256(exp / "MANIFEST.sha256"), "seeds": record,
     "torch": torch.__version__, "cuda": torch.version.cuda, "python": platform.python_version(),
-    "selection": bwb.SELECTION}, indent=1))
-bwb.write_manifest(out, ["part.json", *(f"seeds/seed{k}.csv" for k in results)])
-print(f"wrote {out}: seed(s) {seeds} on {gpu} ({precision}); merge all parts with --merge")
+    "selection": bwb.SELECTION, **({"variant": "trainval", "trainval_epochs": epochs} if variant else {})}, indent=1))
+bwb.write_manifest(out, ["part.json", *(f"seeds/seed{k}.csv" for k in results), *(f"trainval/seed{k}.csv" for k in variant)])
+print(f"wrote {out}: seed(s) {seeds} on {gpu} ({precision}); " +
+      ("exploratory train+val variant: score it on the harness, never import it" if variant else "merge all parts with --merge"))

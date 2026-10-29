@@ -34,9 +34,14 @@ def instruction_files(workdir: str | Path) -> list[Path]:
     return found
 
 
+MODEL_USAGE = {"inputTokens": "input_tokens", "cacheReadInputTokens": "cache_read_input_tokens",
+               "cacheCreationInputTokens": "cache_creation_input_tokens", "outputTokens": "output_tokens"}
+
+
 def parse_usage(kind: str | None, stdout: str) -> dict | None:
     """Token use from CLI output: JSON objects (whole output or one per line) with a `usage` dict.
-    kind "last" keeps the final one (single result object), "sum" adds them up (per-turn events)."""
+    kind "last" keeps the final one (single result object), its cumulative `modelUsage` summed over models
+    when it has one; "sum" adds them up (per-turn events)."""
     # shortcut: assumes the CLI prints usage as {"usage": {...numbers}}; confirm per CLI version before real runs
     if not kind:
         return None
@@ -46,11 +51,16 @@ def parse_usage(kind: str | None, stdout: str) -> dict | None:
             objs.append(json.loads(chunk))
         except (json.JSONDecodeError, TypeError):
             pass
-    usages = [o["usage"] for o in objs if isinstance(o, dict) and isinstance(o.get("usage"), dict)]
-    if not usages:
+    found = [o for o in objs if isinstance(o, dict) and isinstance(o.get("usage"), dict)]
+    if not found:
         return None
+    models = found[-1].get("modelUsage")
+    if kind == "last" and isinstance(models, dict) and models:
+        # Claude: `usage` covers only the last turn of a run resumed by a background-task notification;
+        # `modelUsage` is the whole run's, per model (D-021)
+        return {k: sum(m.get(c, 0) for m in models.values() if isinstance(m, dict)) for c, k in MODEL_USAGE.items()}
     total: dict[str, float] = {}
-    for u in usages[-1:] if kind == "last" else usages:
+    for u in [o["usage"] for o in (found[-1:] if kind == "last" else found)]:
         for k, v in u.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 total[k] = total.get(k, 0) + v

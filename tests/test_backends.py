@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -53,6 +54,18 @@ def test_parse_usage():
     codex = "\n".join(['{"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 1}}'] * 3)
     assert parse_usage("sum", codex) == {"input_tokens": 15, "output_tokens": 3}
     assert parse_usage("sum", "no json") is None and parse_usage(None, claude) is None
+
+
+def test_parse_usage_of_a_resumed_claude_run():
+    # resumed by a background-task notification: `usage` is the last turn only, `modelUsage` the whole run
+    out = json.dumps({"num_turns": 1, "usage": {"input_tokens": 4, "cache_read_input_tokens": 56608,
+                                                "cache_creation_input_tokens": 1204, "output_tokens": 68},
+                      "modelUsage": {"claude-opus-5-5": {"inputTokens": 92, "outputTokens": 15522, "cacheReadInputTokens": 1743462,
+                                                         "cacheCreationInputTokens": 57812, "costUSD": 1.12, "contextWindow": 1000000},
+                                     "claude-haiku-5-5": {"inputTokens": 8, "outputTokens": 2, "cacheReadInputTokens": 0,
+                                                          "cacheCreationInputTokens": 0, "costUSD": 0.01}}})
+    assert parse_usage("last", out) == {"input_tokens": 100, "cache_read_input_tokens": 1743462,
+                                        "cache_creation_input_tokens": 57812, "output_tokens": 15524}
 
 
 def test_instruction_files_found_in_workdir_and_parents(tmp_path):

@@ -1,10 +1,12 @@
 """The GPU SOTA rerun's rules (D-018, D-019): its 4 h limit, merging seeds run in parallel, and the check of the
-merged provenance on import.
+merged provenance on import; and the pieces of the exploratory train+val variant (D-022), which never merges.
 
 Kept apart from bwb_neuropixels_wheel, which batch b-20261028-044630-f61b imports while it runs: only the GPU job
 (scripts/sota_gpu_job.py, from the export) and scripts/sota_gpu.py use this module.
 """
 from __future__ import annotations
+
+import math
 
 LIMIT_S = 4 * 3600  # the whole job, from the first seed starting to the last seed finishing (D-019)
 ALL_SEEDS = (1, 2, 3, 4, 5)  # indices into EVAL_SEEDS, as in seeds/seed<k>.csv
@@ -14,11 +16,46 @@ class TimeUp(Exception):
     """Raised by a fit once the limit has passed."""
 
 
+class Stop(Exception):
+    """Raised by stop_after's stand-in once its epochs are done, with the predictions after the last one."""
+
+    def __init__(self, pred):
+        super().__init__()
+        self.pred = pred
+
+
+def best_epoch(scores) -> int | None:
+    """The epoch whose weights poyo_finetune keeps: the first with the highest finite val R^2."""
+    best, at = float("-inf"), None
+    for epoch, s in enumerate(scores):
+        if math.isfinite(s) and s > best:
+            best, at = s, epoch
+    return at
+
+
+def stop_after(epochs: int):
+    """A stand-in for bwb_neuropixels_wheel.pooled_r2 in the exploratory train+val refit (D-022), where
+    poyo_finetune gets the test trials in its validation slot: each call sees the test predictions after one more
+    epoch, reports a rising score so that early stopping never starts, and raises Stop with the predictions once
+    `epochs` epochs have run."""
+    calls = []
+
+    def r2(pred, y):
+        calls.append(None)
+        if len(calls) == epochs:
+            raise Stop(pred)
+        return float(len(calls))
+
+    return r2
+
+
 def part_problems(parts: list[dict], export_manifest_sha256: str) -> list[str]:
     """What stops a set of per-seed job outputs (part.json each) from merging into one 5-seed result: parts from
     another export or other inputs, or seeds missing or run more than once."""
     problems = [f"part {i}: made from another export" for i, p in enumerate(parts, 1)
                 if p.get("export_manifest_sha256") != export_manifest_sha256]
+    problems += [f"part {i}: the exploratory train+val variant (D-022), never a SOTA result" for i, p in enumerate(parts, 1)
+                 if p.get("variant")]
     if len({repr(sorted(p.get("inputs_sha256", {}).items())) for p in parts}) > 1:
         problems.append("parts read different inputs")
     run = [int(k) for p in parts for k in p.get("seeds", {})]

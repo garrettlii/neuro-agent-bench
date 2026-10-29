@@ -59,3 +59,28 @@ Append-only. Any change to a frozen spec, metric, baseline, budget or scoring ru
     - `scripts/sota_gpu.py import` refuses a result whose overall wall time, recomputed from the seeds' times, exceeds 4 h. Across machines this relies on their clocks agreeing.
     - `--smoke` projects seconds per session per seed from 42 epochs of one session.
   - **Batch code unchanged:** no code the running batch imports changed.
+
+- **D-020 Leakage gate triggered; batch b-20261028-044630-f61b is not reported (owner, 2026-10-28; provisional until the GPU SOTA is imported).**
+  - **Trigger:** the pre-registered C3 leakage check triggers on its second criterion (C3 more than 0.05 normalized above the signal-free `profile` reference), for both models, against the published SOTA. It would not trigger only if the SOTA rerun scored at least 0.56 R². It becomes final when the GPU SOTA is imported and the batch is scored.
+  - **Consequence:** per the pre-registration, no results from this batch are reported.
+  - **Investigation:** exploratory, with outputs under `runs_root/b-20261028-044630-f61b/investigation/`, outside the repository. It cannot clear this batch for citation; a citable result needs a new pre-registered batch. The scorer, the pre-registration and the batch's scores are unchanged.
+
+- **D-021 Claude token counts from the cumulative `modelUsage` (owner, 2026-10-28; after batch b-20261028-044630-f61b was generated).**
+  - **Problem:** `parse_usage` took the Claude CLI's final `usage` object. When a run is resumed by a background-task notification, that object covers only the last turn. In b-20261028-044630-f61b, 4 of the 6 opus runs were undercounted: C2 opus was recorded as 292,350 in / 2,364 out over 3 runs, against 5,492,650 / 47,160 cumulative.
+  - **Fix:** with `usage: last`, a final object that carries `modelUsage` now gives its totals summed over models (input, cache read, cache creation, output). The other CLIs and the scripted stand-in are unchanged.
+  - **Sol:** its counts cannot be checked against session logs, because none exist: Codex runs with `--ephemeral`, and the agent home is emptied after every run. Each Sol run's output has exactly one `turn.completed` event, which `usage: sum` takes as is.
+  - **This batch:** `runs.jsonl` stays as recorded. Every run's counts, recomputed from its saved CLI output with the new parser, are in `investigation/3_tokens_recomputed.jsonl`. No run exceeded the 3 M token budget; the largest used 2.72 M in + out.
+
+- **D-022 Exploratory GPU variant: POYO+ refit on train+val (owner, 2026-10-28, before any GPU run; not the SOTA baseline).**
+  - **What:** `run_sota.py --trainval [--seeds S...]` first runs the frozen fit for each session and seed: train trials, with the best epoch picked on val. It then finetunes POYO+ afresh from the checkpoint on train+val for that count of epochs (best epoch + 1), on the same schedule: OneCycleLR over 300 epochs with steps per epoch from train+val, and the backbone frozen until epoch 40. The final weights predict test. It follows D-018's precision rule and has no time limit. It writes `seeds/` (the train-only fits), `trainval/` and each fit's epoch count in `part.json`.
+  - **Never SOTA:** `--merge` refuses variant parts, so the variant can never become or be imported as the SOTA result. Any scoring of it is exploratory, done on the harness.
+  - **Frozen job unchanged:** without `--trainval`, `run_sota.py` runs the D-019 job as before, and `bwb_neuropixels_wheel.py` is unchanged. The variant reuses `poyo_finetune` unchanged. It puts the test trials in the validation slot and replaces the per-epoch R² with a stand-in (`bwb_sota_gpu.stop_after`) that stops after the chosen epoch count.
+  - **Export:** `~/sota-export` is left as is (`MANIFEST.sha256` SHA-256 `d6dcfb0a…ab9f6b`). The variant needs the new `run_sota.py` and `code/nabench/tasks/bwb_sota_gpu.py`, so a second export, `~/sota-export-2` (`0be52dac…076d37`), differs in those two files only. Its default path is the same frozen job.
+  - **Projected extra GPU time:** about 2.1 to 2.2 times the frozen job's.
+    - Repeating the train-only fits (needed to pick the epoch count) costs 1.0 times the frozen job.
+    - The refits cost 1.07 to 1.15 times the frozen job:
+      - Train+val holds 1.445 times the train trials (11,266 vs 7,795 over the 29 sessions).
+      - A refit runs about 74 epochs (best epoch + 1, if the published runs' 93-epoch average ended on patience 20), against 93 for a fit.
+      - The range covers backbone-frozen epochs costing 0.5 to 1 times a full epoch.
+    - Not counted: a forward pass over the test trials each refit epoch, in place of the val pass.
+    - `--smoke` on the target GPU gives the per-session time these multiply.

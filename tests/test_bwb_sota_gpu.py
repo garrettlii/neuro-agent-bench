@@ -5,11 +5,12 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 
 from nabench.config import REPO_ROOT
 from nabench.metrics import write_cases
 from nabench.tasks import bwb_neuropixels_wheel as bwb
-from nabench.tasks.bwb_sota_gpu import LIMIT_S, merge_provenance, part_problems, provenance_problems
+from nabench.tasks.bwb_sota_gpu import LIMIT_S, Stop, best_epoch, merge_provenance, part_problems, provenance_problems, stop_after
 
 EVAL = (43, 44, 45, 46, 47)
 CODE = ("__init__.py", "metrics.py", "tasks/__init__.py", "tasks/bwb_neuropixels_wheel.py", "tasks/bwb_sota_gpu.py")
@@ -104,3 +105,15 @@ def test_merge_refuses_a_job_over_four_hours(tmp_path):
     exp, data, folders = _job_folders(tmp_path, ends=(3600, LIMIT_S + 60))
     res = _merge(exp, tmp_path / "out", folders)
     assert res.returncode != 0 and "over the 14400 s limit" in res.stderr and not (tmp_path / "out").exists()
+
+
+def test_trainval_variant_pieces():
+    assert best_epoch([0.1, float("nan"), 0.3, 0.3, 0.2]) == 2   # the first best finite epoch, as poyo_finetune keeps
+    r2 = stop_after(3)
+    assert [r2("p0", None), r2("p1", None)] == [1.0, 2.0]       # rising: poyo_finetune never starts early stopping
+    with pytest.raises(Stop) as done:
+        r2("p2", None)
+    assert done.value.pred == "p2"                               # the predictions after the 3rd epoch
+    a, b = _parts()
+    assert part_problems([a, {**b, "variant": "trainval"}], "e") == [
+        "part 2: the exploratory train+val variant (D-022), never a SOTA result"]
