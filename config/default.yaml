@@ -1,12 +1,12 @@
 # All three directories must be outside this repository and outside each other (enforced at load time).
 paths:
-  data_root: ~/nab-data     # raw downloads, derived task data, trained-model tool weights
-  runs_root: ~/nab-runs     # per-run workspaces, logs and run records, per batch
-  truth_root: ~/nab-truth   # test labels, submissions, per-case scores and the ledger; scorer only
+  data_root: ~/benchmarks/nab/nab-data     # raw downloads, derived task data, trained-model tool weights
+  runs_root: ~/benchmarks/nab/nab-runs     # per-run workspaces, logs and run records, per batch
+  truth_root: ~/benchmarks/nab/nab-truth   # test labels, submissions, per-case scores and the ledger; scorer only
 
 sandbox:
   # The agent can never read these either (related projects with design docs or answer keys).
-  deny_extra: [~/dark-gene-bench, ~/dgb-data, ~/dgb-runs, ~/dgb-truth]
+  deny_extra: [~/benchmarks/dgb]
   # CLI state directories the agent CLI itself must write to.
   extra_write: [~/.claude-bench, ~/.codex-bench]
   # Models with `isolation: agent_user` run as this macOS user instead of under sandbox-exec, because their CLIs'
