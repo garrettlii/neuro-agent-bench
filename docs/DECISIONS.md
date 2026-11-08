@@ -85,3 +85,18 @@ Append-only. Any change to a frozen spec, metric, baseline, budget or scoring ru
       - The range covers backbone-frozen epochs costing 0.5 to 1 times a full epoch.
     - Not counted: a forward pass over the test trials each refit epoch, in place of the val pass.
     - `--smoke` on the target GPU gives the per-session time these multiply.
+
+## 2026-11-07
+
+- **D-023 No GPU work (owner).** No further runs of any kind on a GPU. The GPU SOTA rerun (D-010, D-019) and the exploratory train+val variant (D-022) will not run.
+  - **SOTA and reports:** batch b-20261028-044630-f61b never gets a SOTA baseline or its seed references, so its report stays INTERIM. H0 and P0 stay untested, and the leakage trigger in D-020 stays provisional against the published SOTA.
+  - **What is unchanged:** the GPU export and import code and both exports stay as they are. The scorer, the pre-registration and the batch's scores are unchanged.
+
+- **D-024 Project closed (owner).** NeuroAgentBench is closed. `docs/CLOSEOUT.md` records:
+  - what was built and the pilot batch;
+  - the leakage gate and the exploratory investigation;
+  - what remains undone and lessons for future benchmarks.
+
+  The owner set aside rule 7 for the close-out, as D-020 did for the informal analysis. Sections 3 to 5 interpret the results, including the Claude results, and section 7 makes recommendations formed after seeing them. Both were written under that conflict of interest.
+
+  No result from b-20261028-044630-f61b is citable. Data, runs and truth stay outside the repository, and nothing has been deleted; what to keep is the owner's decision. Reopening the project needs a new entry, and any citable result needs a new pre-registered batch.

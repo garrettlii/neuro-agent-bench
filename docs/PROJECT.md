@@ -32,6 +32,13 @@ Phases end on exit criteria, not dates.
 
 ## Status
 
-- D1: harness, sandbox, guard, scorer and dummy task in place; `pytest -q` passes.
-- D2: rule adopted (D-001); registry holds the five pilot tasks only.
-- D3: spec stubs and audit checklists created; all fields FILL.
+**Closed on 2026-11-07 (D-024).** See `docs/CLOSEOUT.md`. The project ended in the Pilot phase.
+
+- D1: accepted. The harness, sandbox, agent-user isolation, guard, scorer and dummy task are in place, and `pytest -q` passes.
+- D2: the rule is adopted (D-001). The registry holds the five pilot tasks and one candidate.
+- D3: not accepted.
+  - bwb_neuropixels_wheel was audited, frozen, pre-registered and run as batch b-20261028-044630-f61b. Its leakage gate triggered (D-020), so no result is citable.
+  - The other four pilot tasks are still FILL.
+- D4: not accepted. BWB has a simple and an AutoML baseline, but no SOTA rerun, and no GPU work will be done (D-023).
+- D5: partial. C2 and C3 ran on BWB with two model families. C1, C4, C5, an open-weights model and an enforced cost cap are not done.
+- D6 to D9: not started.

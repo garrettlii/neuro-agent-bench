@@ -2,6 +2,9 @@
 
 Can general LLM agents, given tools and scientific knowledge, analyse neuroscience data as well as or better than task-specific trained models, and how much of their performance comes from using those trained models as tools?
 
+**Status: closed on 2026-11-07 (D-024).** See `docs/CLOSEOUT.md`. No result from the pilot batch is citable.
+
+- Close-out: `docs/CLOSEOUT.md`
 - Plan and deliverables: `docs/PROJECT.md`
 - Scoring, conditions and integrity: `docs/DESIGN.md`
 - Task-selection rule and registry: `docs/TASK_SELECTION.md`
