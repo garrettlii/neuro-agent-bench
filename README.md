@@ -8,3 +8,5 @@ Can general LLM agents, given tools and scientific knowledge, analyse neuroscien
 - How to run: `docs/RUNBOOK.md`
 
 Each task is a spec in `tasks/<id>/spec.yaml`. Agents run in a sandboxed workspace that holds only the dev data, the test inputs and the condition's tools; a separate scorer compares their predictions with test labels the agent cannot read.
+
+This benchmark was closed on 11/07, due to a lack of computing resources.
